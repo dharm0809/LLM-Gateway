@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "walacor-gateway.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "walacor-gateway.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "walacor-gateway.name" . }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: WALACOR_GATEWAY_TENANT_ID
+              value: {{ .Values.env.WALACOR_GATEWAY_TENANT_ID | quote }}
+            - name: WALACOR_CONTROL_PLANE_URL
+              value: {{ .Values.env.WALACOR_CONTROL_PLANE_URL | quote }}
+            - name: WALACOR_WAL_PATH
+              value: {{ .Values.env.WALACOR_WAL_PATH | quote }}
+          volumeMounts:
+            - name: wal
+              mountPath: /var/walacor/wal
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: wal
+          persistentVolumeClaim:
+            claimName: {{ include "walacor-gateway.fullname" . }}-wal

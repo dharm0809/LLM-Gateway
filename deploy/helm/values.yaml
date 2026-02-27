@@ -1,0 +1,73 @@
+replicaCount: 1
+
+image:
+  repository: walacor-gateway
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+env:
+  # Identity
+  WALACOR_GATEWAY_TENANT_ID: ""
+
+  # Walacor backend storage — set all three to enable (replaces SQLite WAL)
+  # In production, mount these from a K8s Secret instead of plain values.
+  WALACOR_SERVER: ""
+  WALACOR_USERNAME: ""
+  # WALACOR_PASSWORD is intentionally absent here; inject via secretRef below.
+
+  # Governance (required when skip_governance=false and Walacor storage not configured)
+  WALACOR_CONTROL_PLANE_URL: ""
+  WALACOR_CONTROL_PLANE_API_KEY: ""
+  WALACOR_SKIP_GOVERNANCE: "false"
+
+  # Provider credentials (inject via secretRef in production)
+  WALACOR_PROVIDER_OPENAI_KEY: ""
+  WALACOR_PROVIDER_ANTHROPIC_KEY: ""
+  WALACOR_PROVIDER_OLLAMA_URL: ""
+
+  # Caller auth
+  WALACOR_GATEWAY_API_KEYS: ""
+
+  # WAL path
+  WALACOR_WAL_PATH: /var/walacor/wal
+
+  # Observability
+  WALACOR_LOG_LEVEL: INFO
+  WALACOR_METRICS_ENABLED: "true"
+
+  # Features
+  WALACOR_SESSION_CHAIN_ENABLED: "true"
+  WALACOR_PII_DETECTION_ENABLED: "true"
+  WALACOR_TOXICITY_DETECTION_ENABLED: "false"
+
+  # Phase 15: Redis + multi-model routing
+  # Set WALACOR_REDIS_URL to enable shared state across replicas (e.g. redis://redis-svc:6379/0)
+  WALACOR_REDIS_URL: ""
+  # JSON array of model routing rules, e.g.:
+  # '[{"pattern":"gpt-*","provider":"openai","url":"https://api.openai.com","key":"sk-..."},
+  #   {"pattern":"llama*","provider":"ollama","url":"http://ollama-svc:11434"}]'
+  WALACOR_MODEL_ROUTING_JSON: ""
+  # Increase to >1 only when WALACOR_REDIS_URL is set (in-memory state is not shared across workers)
+  WALACOR_UVICORN_WORKERS: "1"
+
+# Reference a K8s Secret for sensitive values:
+# secretRef:
+#   name: walacor-gateway-secrets
+#   keys:
+#     - WALACOR_PASSWORD
+#     - WALACOR_PROVIDER_OPENAI_KEY
+#     - WALACOR_GATEWAY_API_KEYS
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  limits:
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+walVolume:
+  size: 10Gi

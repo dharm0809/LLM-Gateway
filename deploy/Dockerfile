@@ -1,0 +1,21 @@
+# Build from repo root: docker build -f Gateway/deploy/Dockerfile .
+# Multi-stage: build then minimal runtime
+FROM python:3.12-slim AS builder
+WORKDIR /build
+COPY walacor-core /build/walacor-core
+COPY Gateway /build/Gateway
+RUN pip install --no-cache-dir build && \
+    pip wheel --no-deps -w /wheels ./walacor-core && \
+    pip wheel --no-deps -w /wheels ./Gateway
+
+FROM python:3.12-slim AS runtime
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+RUN useradd --create-home --uid 1000 app
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+USER app
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=2 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+ENTRYPOINT ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]

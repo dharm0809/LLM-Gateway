@@ -1,0 +1,123 @@
+"""Background delivery: read undelivered WAL records and POST to control plane. Exponential backoff."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from datetime import datetime, timezone
+
+import httpx
+
+from gateway.config import get_settings
+from gateway.wal.writer import WALWriter
+from gateway.metrics.prometheus import delivery_total
+
+logger = logging.getLogger(__name__)
+
+
+class DeliveryWorker:
+    """Async task: poll WAL for undelivered records, POST to /v1/gateway/executions, mark delivered."""
+
+    def __init__(self, wal: WALWriter) -> None:
+        self._wal = wal
+        self._running = False
+        self._task: asyncio.Task | None = None
+        self._interval = 1.0
+        self._batch_size = 50
+        self._backoff = 1.0
+        self._max_backoff = 60.0
+        self._cycles = 0
+        self._client: httpx.AsyncClient | None = None
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._task = asyncio.create_task(self._loop())
+
+    def stop(self) -> None:
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            self._task = None
+        # Do NOT call run_until_complete here — stop() is invoked from on_shutdown()
+        # which runs inside the event loop. Let _loop()'s CancelledError handler close
+        # the client, or the OS will reclaim connections on process exit.
+        self._client = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=30.0,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._client
+
+    async def _loop(self) -> None:
+        while self._running:
+            try:
+                await self._deliver_batch()
+                self._backoff = 1.0
+                self._cycles += 1
+                if self._cycles % 60 == 0:
+                    settings = get_settings()
+                    deleted = self._wal.purge_delivered(settings.wal_max_age_hours)
+                    if deleted:
+                        logger.info("WAL purge_delivered: deleted %d records", deleted)
+                    attempts_deleted = self._wal.purge_attempts(settings.attempts_retention_hours)
+                    if attempts_deleted:
+                        logger.info("WAL purge_attempts: deleted %d records", attempts_deleted)
+            except asyncio.CancelledError:
+                if self._client and not self._client.is_closed:
+                    await self._client.aclose()
+                    self._client = None
+                break
+            except Exception as e:
+                logger.warning("Delivery batch failed: %s", e)
+                await asyncio.sleep(self._backoff)
+                self._backoff = min(self._backoff * 2, self._max_backoff)
+            await asyncio.sleep(self._interval)
+
+    def _control_plane_headers(self) -> dict[str, str]:
+        """Headers for control plane requests (X-API-Key or Authorization: Bearer)."""
+        settings = get_settings()
+        headers = {"Content-Type": "application/json"}
+        key = (settings.control_plane_api_key or "").strip()
+        if key:
+            headers["X-API-Key"] = key
+            headers["Authorization"] = f"Bearer {key}"
+        return headers
+
+    async def _deliver_batch(self) -> None:
+        settings = get_settings()
+        base = settings.control_plane_url.rstrip("/")
+        headers = self._control_plane_headers()
+        rows = self._wal.get_undelivered(limit=self._batch_size)
+        client = await self._get_client()
+        for execution_id, record_json, _ in rows:
+            try:
+                body = json.loads(record_json)
+                r = await client.post(
+                    f"{base}/v1/gateway/executions",
+                    json=body,
+                    headers=headers,
+                )
+                if r.status_code in (200, 201):
+                    delivery_total.labels(result="success").inc()
+                    self._wal.mark_delivered(execution_id)
+                elif r.status_code == 409:
+                    delivery_total.labels(result="duplicate").inc()
+                    self._wal.mark_delivered(execution_id)
+                elif 400 <= r.status_code < 500:
+                    delivery_total.labels(result="error").inc()
+                    logger.error("Delivery client error for %s: %s", execution_id, r.status_code)
+                    self._wal.mark_delivered(execution_id)
+                else:
+                    delivery_total.labels(result="error").inc()
+                    raise RuntimeError(f"HTTP {r.status_code}")
+            except Exception as e:
+                delivery_total.labels(result="error").inc()
+                logger.warning("Delivery failed for %s: %s", execution_id, e)
+                raise

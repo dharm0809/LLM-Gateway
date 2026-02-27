@@ -1,0 +1,43 @@
+"""Step 4: Build execution record for WAL and control plane.
+
+Gateway does not hash; we send prompt_text and response_content. Walcor backend hashes them.
+Records are built as dicts (no prompt_hash/response_hash) so no schema dependency on hashes.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+from gateway.adapters.base import ModelCall, ModelResponse
+
+
+def build_execution_record(
+    call: ModelCall,
+    model_response: ModelResponse,
+    attestation_id: str,
+    policy_version: int,
+    policy_result: str,
+    tenant_id: str,
+    gateway_id: str,
+    user: str | None = None,
+    session_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Build execution record as dict (no prompt_hash/response_hash — backend hashes from content)."""
+    return {
+        "execution_id": str(uuid.uuid4()),
+        "model_attestation_id": attestation_id,
+        "policy_version": policy_version,
+        "policy_result": policy_result,
+        "tenant_id": tenant_id,
+        "gateway_id": gateway_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "user": user,
+        "session_id": session_id,
+        "metadata": metadata,
+        "prompt_text": call.prompt_text or None,
+        "response_content": model_response.content or None,
+        "provider_request_id": model_response.provider_request_id,
+        "model_hash": model_response.model_hash,
+    }

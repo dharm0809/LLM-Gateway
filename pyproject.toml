@@ -1,0 +1,41 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=61", "setuptools-scm"]
+
+[project]
+name = "walacor-gateway"
+version = "0.1.0"
+description = "Walacor AI Security Gateway - data plane for AI-SLOP"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.12"
+dependencies = [
+  "walacor-core",
+  "starlette>=0.40",
+  "uvicorn[standard]>=0.34",
+  "httpx>=0.28",
+  "pydantic-settings>=2.0",
+  "prometheus-client>=0.20",
+  "uvloop>=0.21.0; sys_platform != 'win32'",
+]
+
+[project.optional-dependencies]
+redis = ["redis>=5.0"]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[project.scripts]
+walacor-gateway = "gateway.main:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]

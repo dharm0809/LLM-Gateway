@@ -1,0 +1,259 @@
+"""Async Walacor backend client: authenticate, write execution records and gateway attempts."""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import contextlib
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+
+from walacor_core.models.execution import ExecutionRecord
+
+logger = logging.getLogger(__name__)
+
+# Refresh JWT this many seconds before expiry to avoid 401 on the first request after expiry.
+_REFRESH_LEAD_SECONDS = 300  # 5 minutes
+# When JWT has no exp, refresh at this interval (seconds).
+_FALLBACK_REFRESH_INTERVAL = 3000  # 50 minutes
+_MAX_SLEEP_SECONDS = 3600  # cap single sleep so we don't oversleep on clock skew
+
+# Walacor system envelope type for schema management — not used at runtime,
+# but documents where ETId=50 comes from (SystemEnvelopeType.Schema).
+_SYSTEM_ETID_SCHEMA = 50
+
+
+def _parse_jwt_exp(token: str) -> datetime | None:
+    """Extract exp (expiration) from a JWT. Returns UTC datetime or None if missing/invalid."""
+    if not token:
+        return None
+    jwt = token.removeprefix("Bearer ").strip()
+    parts = jwt.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload_b64 = parts[1]
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+    except (ValueError, KeyError, TypeError):
+        return None
+    exp = payload.get("exp")
+    if exp is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(exp), tz=timezone.utc)
+    except (ValueError, OSError):
+        return None
+
+
+def _next_refresh_delay_seconds(token: str | None) -> float:
+    """Seconds to sleep before the next proactive refresh. Uses exp from JWT or fallback."""
+    exp = _parse_jwt_exp(token or "")
+    now = datetime.now(timezone.utc)
+    if exp is not None:
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp > now:
+            delay = (exp - now).total_seconds() - _REFRESH_LEAD_SECONDS
+            return max(0.0, min(delay, _MAX_SLEEP_SECONDS))
+    return float(_FALLBACK_REFRESH_INTERVAL)
+
+
+class WalacorClient:
+    """Async HTTP client for writing execution records and gateway attempts to Walacor.
+
+    Two Walacor schemas are required (created once, not by this class):
+      - ETId=walacor_executions_etid  (default 9000001)  → walacor_gw_executions
+      - ETId=walacor_attempts_etid    (default 9000002)  → walacor_gw_attempts
+
+    Authentication uses username/password → JWT Bearer token with automatic
+    re-authentication on 401 and proactive refresh before expiry.
+    """
+
+    def __init__(
+        self,
+        server: str,
+        username: str,
+        password: str,
+        executions_etid: int = 9000001,
+        attempts_etid: int = 9000002,
+        tool_events_etid: int = 9000003,
+    ) -> None:
+        self._server = server.rstrip("/")
+        self._username = username
+        self._password = password
+        self._executions_etid = executions_etid
+        self._attempts_etid = attempts_etid
+        self._tool_events_etid = tool_events_etid
+        self._token: str | None = None
+        self._http: httpx.AsyncClient | None = None
+        self._auth_lock: asyncio.Lock = asyncio.Lock()
+        self._refresh_task: asyncio.Task[None] | None = None
+        self._closed = False
+
+    # ── Lifecycle ────────────────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        """Create HTTP client and authenticate. Must be called before any writes."""
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+        await self._authenticate()
+        self._refresh_task = asyncio.create_task(self._refresh_loop())
+        logger.info("WalacorClient ready server=%s executions_etid=%d attempts_etid=%d tool_events_etid=%d",
+                    self._server, self._executions_etid, self._attempts_etid, self._tool_events_etid)
+
+    async def close(self) -> None:
+        """Close the underlying HTTP client and stop the refresh task."""
+        self._closed = True
+        if self._refresh_task is not None:
+            self._refresh_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._refresh_task
+            self._refresh_task = None
+        if self._http:
+            await self._http.aclose()
+            self._http = None
+
+    # ── Auth ─────────────────────────────────────────────────────────────────
+
+    async def _authenticate(self) -> None:
+        assert self._http is not None, "call start() first"
+        async with self._auth_lock:
+            resp = await self._http.post(
+                f"{self._server}/auth/login",
+                json={"userName": self._username, "password": self._password},
+            )
+            resp.raise_for_status()
+            self._token = resp.json()["api_token"]  # "Bearer <jwt>"
+
+    async def _refresh_loop(self) -> None:
+        """Background task: refresh JWT before expiry to avoid 401 latency spike."""
+        while not self._closed and self._http is not None:
+            delay = _next_refresh_delay_seconds(self._token)
+            await asyncio.sleep(delay)
+            if self._closed or self._http is None:
+                break
+            try:
+                await self._authenticate()
+                logger.debug("WalacorClient JWT refreshed proactively")
+            except Exception as e:
+                logger.warning("WalacorClient proactive JWT refresh failed: %s", e)
+                await asyncio.sleep(60.0)
+
+    def _headers(self, etid: int) -> dict[str, str]:
+        return {
+            "Authorization": self._token or "",
+            "Content-Type": "application/json",
+            "ETId": str(etid),
+        }
+
+    # ── Core submit ──────────────────────────────────────────────────────────
+
+    async def _submit(self, etid: int, records: list[dict[str, Any]]) -> None:
+        """POST records to /envelopes/submit; re-authenticates once on 401."""
+        assert self._http is not None
+        for attempt in range(2):
+            resp = await self._http.post(
+                f"{self._server}/envelopes/submit",
+                json={"Data": records},
+                headers=self._headers(etid),
+            )
+            if resp.status_code == 401 and attempt == 0:
+                logger.debug("WalacorClient token expired — re-authenticating")
+                await self._authenticate()
+                continue
+            resp.raise_for_status()
+            return
+
+    # ── Public write methods ─────────────────────────────────────────────────
+
+    async def write_execution(self, record: ExecutionRecord | dict[str, Any]) -> None:
+        """Persist one execution record to Walacor (ETId=walacor_executions_etid).
+
+        Accepts ExecutionRecord or a dict (gateway builds dicts without prompt_hash/response_hash;
+        backend hashes from prompt_text/response_content). The ``metadata`` dict is serialised
+        to ``metadata_json``. None-valued fields are omitted.
+        """
+        if isinstance(record, dict):
+            data = dict(record)
+        else:
+            data = record.model_dump(mode="json")
+        meta = data.pop("metadata", None)
+        if meta:
+            data["metadata_json"] = json.dumps(meta)
+        data = {k: v for k, v in data.items() if v is not None}
+        eid = data.get("execution_id", "?")
+        try:
+            await self._submit(self._executions_etid, [data])
+            logger.debug("Walacor write_execution execution_id=%s", eid)
+        except Exception as e:
+            logger.error(
+                "Walacor write_execution failed execution_id=%s: %s",
+                eid, e,
+            )
+            raise
+
+    async def write_attempt(
+        self,
+        request_id: str,
+        tenant_id: str,
+        path: str,
+        disposition: str,
+        status_code: int,
+        provider: str | None = None,
+        model_id: str | None = None,
+        execution_id: str | None = None,
+    ) -> None:
+        """Persist one gateway_attempts row to Walacor (ETId=walacor_attempts_etid).
+
+        Failures are logged as warnings only — attempt records are best-effort
+        and must never block the response path.
+        """
+        record: dict[str, Any] = {
+            "request_id": request_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tenant_id": tenant_id,
+            "path": path,
+            "disposition": disposition,
+            "status_code": status_code,
+        }
+        if provider:
+            record["provider"] = provider
+        if model_id:
+            record["model_id"] = model_id
+        if execution_id:
+            record["execution_id"] = execution_id
+        try:
+            await self._submit(self._attempts_etid, [record])
+            logger.debug(
+                "Walacor write_attempt request_id=%s disposition=%s",
+                request_id, disposition,
+            )
+        except Exception as e:
+            logger.warning(
+                "Walacor write_attempt failed request_id=%s: %s",
+                request_id, e,
+            )
+            # Swallow — attempt records are best-effort
+
+    async def write_tool_event(self, record: dict[str, Any]) -> None:
+        """Persist one tool event record to Walacor (ETId=walacor_tool_events_etid).
+
+        Best-effort — failures are logged as warnings and swallowed so tool event
+        auditing never blocks the response path.
+        """
+        data = {k: v for k, v in record.items() if v is not None}
+        try:
+            await self._submit(self._tool_events_etid, [data])
+            logger.debug("Walacor write_tool_event event_id=%s", data.get("event_id", "?"))
+        except Exception as e:
+            logger.warning(
+                "Walacor write_tool_event FAILED event_id=%s: %s",
+                data.get("event_id", "?"), e,
+            )

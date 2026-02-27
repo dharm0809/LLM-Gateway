@@ -1,0 +1,51 @@
+# GovCloud / government deployment overrides.
+# Use: helm install -f values.yaml -f values-govcloud.yaml ...
+# - FIPS image, stricter resources, enhanced logging, network policy.
+
+replicaCount: 1
+
+image:
+  repository: walacor-gateway
+  tag: "0.1.0-fips"
+  pullPolicy: IfNotPresent
+
+env:
+  WALACOR_GATEWAY_TENANT_ID: ""
+  WALACOR_CONTROL_PLANE_URL: ""
+  WALACOR_PROVIDER_OPENAI_KEY: ""
+  WALACOR_WAL_PATH: /var/walacor/wal
+  WALACOR_LOG_LEVEL: "INFO"
+  WALACOR_ENFORCEMENT_MODE: "enforced"
+
+resources:
+  limits:
+    memory: 1Gi
+    cpu: "1"
+  requests:
+    cpu: 200m
+    memory: 512Mi
+
+walVolume:
+  size: 20Gi
+
+# Stricter for GovCloud
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+# Enable network policy (reference deploy/network-policies/)
+networkPolicy:
+  enabled: true
+
+# Optional: extra labels for compliance
+podLabels:
+  compliance: "govcloud"

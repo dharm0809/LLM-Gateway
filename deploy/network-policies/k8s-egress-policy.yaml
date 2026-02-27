@@ -1,0 +1,19 @@
+# Example: restrict gateway egress to control plane and OpenAI only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: walacor-gateway-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: walacor-gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8000   # control plane
+        - protocol: TCP
+          port: 443    # OpenAI / provider APIs

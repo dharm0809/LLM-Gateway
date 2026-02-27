@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gateway Chat — qwen3:4b via Walacor</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+    p.sub { color: #666; font-size: 0.875rem; margin-bottom: 1rem; }
+    #log { background: #f5f5f5; border: 1px solid #ddd; border-radius: 8px; padding: 1rem; min-height: 200px; max-height: 50vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+    #input { display: flex; gap: 8px; margin-top: 12px; }
+    #input input { flex: 1; padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 1rem; }
+    #input button { padding: 10px 20px; background: #222; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 1rem; }
+    #input button:hover { background: #444; }
+    #input button:disabled { background: #999; cursor: not-allowed; }
+    .err { color: #c00; }
+    .assistant { color: #066; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Gateway Chat</h1>
+  <p class="sub">Sends requests to the Walacor Gateway at <code>http://localhost:8000</code> → Ollama (qwen3:4b). Make sure the gateway and Ollama are running.</p>
+  <div id="log"></div>
+  <div id="input">
+    <input type="text" id="msg" placeholder="Type a message..." autocomplete="off" />
+    <button type="button" id="send">Send</button>
+  </div>
+
+  <script>
+    const API_BASE = 'http://localhost:8000';
+    const MODEL = 'qwen3:4b';
+    const logEl = document.getElementById('log');
+    const inputEl = document.getElementById('msg');
+    const sendBtn = document.getElementById('send');
+
+    function append(text, className) {
+      const p = document.createElement('p');
+      if (className) p.className = className;
+      p.textContent = text;
+      logEl.appendChild(p);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    async function send() {
+      const text = inputEl.value.trim();
+      if (!text) return;
+      inputEl.value = '';
+      sendBtn.disabled = true;
+      append('You: ' + text);
+      append('Thinking…', 'assistant');
+
+      try {
+        const res = await fetch(API_BASE + '/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: MODEL,
+            messages: [{ role: 'user', content: text }],
+            stream: false
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          append('Error ' + res.status + ': ' + (data.error?.message || JSON.stringify(data)), 'err');
+          return;
+        }
+        const content = data.choices?.[0]?.message?.content ?? '(no content)';
+        logEl.lastChild.remove();
+        append('Assistant: ' + content, 'assistant');
+      } catch (e) {
+        logEl.lastChild.remove();
+        append('Request failed: ' + e.message + '. Is the gateway running on port 8000?', 'err');
+      } finally {
+        sendBtn.disabled = false;
+      }
+    }
+
+    sendBtn.addEventListener('click', send);
+    inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+  </script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+# Gateway for local dev. Build from repo root: docker-compose -f Gateway/deploy/docker-compose.yml up
+# Required host env vars: WALACOR_SERVER, WALACOR_USERNAME, WALACOR_PASSWORD
+# Optional: WALACOR_CONTROL_PLANE_URL, OPENAI_API_KEY, ANTHROPIC_API_KEY
+# To start with Redis: docker-compose --profile redis up
+version: "3.8"
+services:
+  redis:
+    image: redis:7-alpine
+    profiles: [redis]
+    ports:
+      - "6379:6379"
+    command: redis-server --save "" --appendonly no
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Gateway/deploy/Dockerfile
+    ports:
+      - "8002:8000"
+    environment:
+      # Identity
+      - WALACOR_GATEWAY_TENANT_ID=${WALACOR_GATEWAY_TENANT_ID:-dev-tenant}
+      # Walacor backend storage (replaces SQLite WAL when all three are set)
+      - WALACOR_SERVER=${WALACOR_SERVER:-}
+      - WALACOR_USERNAME=${WALACOR_USERNAME:-}
+      - WALACOR_PASSWORD=${WALACOR_PASSWORD:-}
+      # Governance (required when WALACOR_SKIP_GOVERNANCE=false and no Walacor storage)
+      - WALACOR_CONTROL_PLANE_URL=${WALACOR_CONTROL_PLANE_URL:-}
+      - WALACOR_CONTROL_PLANE_API_KEY=${WALACOR_CONTROL_PLANE_API_KEY:-}
+      - WALACOR_SKIP_GOVERNANCE=${WALACOR_SKIP_GOVERNANCE:-false}
+      # Provider credentials
+      - WALACOR_PROVIDER_OPENAI_KEY=${OPENAI_API_KEY:-}
+      - WALACOR_PROVIDER_ANTHROPIC_KEY=${ANTHROPIC_API_KEY:-}
+      - WALACOR_PROVIDER_OLLAMA_URL=${WALACOR_PROVIDER_OLLAMA_URL:-}
+      # Caller auth (comma-separated API keys)
+      - WALACOR_GATEWAY_API_KEYS=${WALACOR_GATEWAY_API_KEYS:-}
+      # WAL path (used only when Walacor storage is not configured)
+      - WALACOR_WAL_PATH=/var/walacor/wal
+      # Phase 15: Redis + model routing
+      - WALACOR_REDIS_URL=${WALACOR_REDIS_URL:-}
+      - WALACOR_MODEL_ROUTING_JSON=${WALACOR_MODEL_ROUTING_JSON:-}
+      # Observability
+      - WALACOR_LOG_LEVEL=${WALACOR_LOG_LEVEL:-INFO}
+    volumes:
+      - gateway-wal:/var/walacor/wal
+    depends_on:
+      redis:
+        condition: service_started
+        required: false
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+volumes:
+  gateway-wal: {}
