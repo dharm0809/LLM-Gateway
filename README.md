@@ -1,5 +1,7 @@
 # Walacor AI Security Gateway
 
+claude --resume 2ee8da57-29c3-4afc-afd8-b6c8f4fc2288
+
 **The governance enforcement and cryptographic audit layer for enterprise AI infrastructure.**
 
 A production-grade, drop-in ASGI proxy that integrates with any LLM provider without changing application code. The gateway enforces five security guarantees on every inference request — model attestation, full-fidelity audit recording, pre-inference policy, post-inference content analysis, and session chain integrity — while feeding a cryptographic audit trail to the Walacor control plane. Providers stay providers; the governance layer is Walacor's.
