@@ -76,7 +76,7 @@ async def health_response(request: Request) -> JSONResponse:
 
     # Phase 11: token budget snapshot
     if ctx.budget_tracker and settings.token_budget_enabled:
-        snapshot = ctx.budget_tracker.get_snapshot(settings.gateway_tenant_id)
+        snapshot = await ctx.budget_tracker.get_snapshot(settings.gateway_tenant_id)
         if snapshot:
             payload["token_budget"] = snapshot
 
@@ -85,6 +85,13 @@ async def health_response(request: Request) -> JSONResponse:
         count = ctx.session_chain.active_session_count()
         # Redis tracker returns -1 as a sentinel (SCAN-by-prefix is too expensive)
         payload["session_chain"] = {"active_sessions": count if count >= 0 else "unavailable"}
+
+    # Model capability registry
+    from gateway.pipeline.orchestrator import _model_capabilities
+    if _model_capabilities:
+        payload["model_capabilities"] = {
+            mid: caps for mid, caps in _model_capabilities.items()
+        }
 
     return JSONResponse(payload)
 

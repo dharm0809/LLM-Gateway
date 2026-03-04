@@ -43,6 +43,14 @@ class PipelineContext:
         self.tool_registry: ToolRegistry | None = None
         # Phase 15: Redis client for shared state (multi-replica)
         self.redis_client: Any | None = None
+        # Phase 17: OTel tracer (None when disabled or SDK not installed)
+        self.tracer: Any | None = None
+        # Phase 18: Lineage dashboard reader
+        self.lineage_reader: Any | None = None
+        # Phase 20: Embedded control plane store
+        self.control_store: Any | None = None
+        # Phase 20: Local sync loop task
+        self.local_sync_task: Any | None = None
 
 
 _ctx = PipelineContext()

@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Walacor Gateway — Solution Brief</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,500&family=Geist+Mono:wght@400;500;600&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #1a1a1a;
+  --ink-2: #333333;
+  --ink-3: #555555;
+  --ink-4: #888888;
+  --ink-5: #aaaaaa;
+  --warm: #fdfbf7;
+  --warm-2: #f7f4ee;
+  --warm-3: #eee9df;
+  --paper: #ffffff;
+  --burnt: #c4540a;
+  --burnt-light: #fff4eb;
+  --burnt-dark: #8a3a06;
+  --teal: #0d7377;
+  --teal-light: #e6f5f5;
+  --slate: #2d3748;
+  --crimson: #b91c1c;
+  --crimson-light: #fef2f2;
+  --forest: #166534;
+  --forest-light: #f0fdf4;
+  --navy: #1e3a5f;
+  --navy-light: #eff6ff;
+  --plum: #6b21a8;
+  --plum-light: #faf5ff;
+  --amber: #92400e;
+  --amber-light: #fffbeb;
+  --rule: #d6d0c4;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+@page { size: A4; margin: 0; }
+
+body {
+  font-family: 'DM Sans', -apple-system, sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 10.5px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  width: 210mm;
+  min-height: 297mm;
+  max-height: 297mm;
+  padding: 16mm 18mm 14mm;
+  position: relative;
+  overflow: hidden;
+  page-break-after: always;
+  background: var(--paper);
+}
+.page:last-child { page-break-after: auto; }
+
+/* === MASTHEAD === */
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--ink);
+  margin-bottom: 5mm;
+}
+.masthead-logo {
+  display: flex; align-items: center; gap: 8px;
+}
+.masthead-mark {
+  width: 22px; height: 22px;
+  background: var(--burnt);
+  border-radius: 3px;
+  color: white;
+  font-family: 'Newsreader', serif;
+  font-size: 14px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.masthead-name {
+  font-family: 'Newsreader', serif;
+  font-size: 16px; font-weight: 600;
+  color: var(--ink);
+}
+.masthead-type {
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--ink-4);
+  font-weight: 500;
+}
+
+/* === TYPOGRAPHY === */
+.headline {
+  font-family: 'Newsreader', serif;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.1;
+  letter-spacing: -0.5px;
+  margin: 3mm 0 2mm;
+}
+.headline em { font-style: italic; color: var(--burnt); }
+
+.deck {
+  font-size: 13px;
+  color: var(--ink-3);
+  line-height: 1.55;
+  max-width: 520px;
+  margin-bottom: 4mm;
+  font-weight: 300;
+}
+
+h2 {
+  font-family: 'Newsreader', serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 4mm 0 2mm;
+  line-height: 1.2;
+}
+h2 em { font-style: italic; color: var(--burnt); font-weight: 500; }
+
+h3 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--ink-3);
+  margin: 3mm 0 1.5mm;
+}
+
+p {
+  margin-bottom: 2mm;
+  color: var(--ink-2);
+}
+
+.small { font-size: 9.5px; }
+.muted { color: var(--ink-3); }
+.strong { font-weight: 600; color: var(--ink); }
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--rule);
+  margin: 4mm 0;
+}
+
+/* === PROBLEM GRID === */
+.problem-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 2mm 0 3mm;
+}
+.problem-card {
+  padding: 9px 12px;
+  border-radius: 6px;
+  background: var(--crimson-light);
+  border-left: 3px solid var(--crimson);
+}
+.problem-card .p-title {
+  font-size: 10px; font-weight: 700;
+  color: var(--crimson);
+  margin-bottom: 2px;
+}
+.problem-card .p-body {
+  font-size: 9px;
+  color: var(--ink-2);
+  line-height: 1.45;
+  margin: 0;
+}
+
+/* === ARCHITECTURE DIAGRAM === */
+.arch-wrap {
+  background: var(--warm);
+  border: 1px solid var(--warm-3);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 3mm 0;
+}
+.arch-label {
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--ink-4);
+  font-weight: 600;
+  margin-bottom: 8px;
+  text-align: center;
+}
+.arch-flow {
+  display: grid;
+  grid-template-columns: 100px 28px 1fr 28px 100px;
+  align-items: center;
+  gap: 4px;
+}
+.arch-stack { display: flex; flex-direction: column; gap: 6px; }
+.arch-box {
+  padding: 7px 8px;
+  border-radius: 6px;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 600;
+  border: 1.5px solid;
+}
+.ab-app { background: var(--navy-light); border-color: var(--navy); color: var(--navy); }
+.ab-model { background: var(--forest-light); border-color: var(--forest); color: var(--forest); }
+
+.arch-arrow {
+  text-align: center;
+  font-size: 16px;
+  color: var(--ink-5);
+  font-weight: 300;
+}
+
+.arch-gateway {
+  background: var(--burnt-light);
+  border: 2px solid var(--burnt);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.arch-gw-title {
+  font-family: 'Geist Mono', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--burnt);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.arch-gw-caps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.arch-cap {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-size: 8.5px;
+  font-weight: 500;
+  border: 1px solid;
+}
+.arch-cap-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ac-1 { background: var(--forest-light); border-color: #a7d7a9; color: var(--forest); }
+.ac-1 .arch-cap-dot { background: var(--forest); }
+.ac-2 { background: var(--crimson-light); border-color: #f5c6c6; color: var(--crimson); }
+.ac-2 .arch-cap-dot { background: var(--crimson); }
+.ac-3 { background: var(--plum-light); border-color: #d8b4fe; color: var(--plum); }
+.ac-3 .arch-cap-dot { background: var(--plum); }
+.ac-4 { background: var(--navy-light); border-color: #93c5fd; color: var(--navy); }
+.ac-4 .arch-cap-dot { background: var(--navy); }
+.ac-5 { background: var(--amber-light); border-color: #fcd34d; color: var(--amber); }
+.ac-5 .arch-cap-dot { background: var(--amber); }
+
+.arch-audit {
+  text-align: center;
+  margin-top: 6px;
+}
+.arch-audit-arrow { color: var(--plum); font-size: 10px; }
+.arch-audit-box {
+  display: inline-block;
+  background: var(--plum-light);
+  border: 1px dashed var(--plum);
+  border-radius: 6px;
+  padding: 5px 16px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--plum);
+}
+
+/* === FLOW DIAGRAM === */
+.flow-wrap {
+  background: var(--warm);
+  border: 1px solid var(--warm-3);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 2mm 0;
+}
+.flow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 8px;
+}
+.flow-step {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 6px;
+  margin-bottom: 1px;
+}
+.flow-num {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 8px; font-weight: 700;
+  color: white; flex-shrink: 0;
+}
+.flow-body {}
+.flow-title { font-size: 9.5px; font-weight: 600; }
+.flow-desc { font-size: 8px; color: var(--ink-3); }
+.flow-badge {
+  font-size: 7px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.flow-conn {
+  width: 1px; height: 4px;
+  background: var(--rule);
+  margin-left: 18px;
+}
+
+.fs-blue { background: #e8f1fb; }
+.fs-blue .flow-num { background: var(--navy); }
+.fs-blue .flow-title { color: var(--navy); }
+.fs-green { background: #edf7ee; }
+.fs-green .flow-num { background: var(--forest); }
+.fs-green .flow-title { color: var(--forest); }
+.fs-red { background: #fef2f2; }
+.fs-red .flow-num { background: var(--crimson); }
+.fs-red .flow-title { color: var(--crimson); }
+.fs-gray { background: #f3f4f6; }
+.fs-gray .flow-num { background: #6b7280; }
+.fs-gray .flow-title { color: #374151; }
+.fs-purple { background: #faf5ff; }
+.fs-purple .flow-num { background: var(--plum); }
+.fs-purple .flow-title { color: var(--plum); }
+.fs-orange { background: #fffbeb; }
+.fs-orange .flow-num { background: var(--burnt); }
+.fs-orange .flow-title { color: var(--burnt); }
+.fb-red { background: #fecaca; color: var(--crimson); }
+.fb-green { background: #d1fae5; color: var(--forest); }
+.fb-purple { background: #e9d5ff; color: var(--plum); }
+.fb-orange { background: #fed7aa; color: var(--burnt); }
+
+/* === COMPARISON TABLE === */
+.comp-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 2mm 0 3mm;
+  font-size: 9px;
+}
+.comp-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 2px solid var(--ink);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+.comp-table th.us {
+  color: var(--burnt);
+  background: var(--burnt-light);
+  border-radius: 4px 4px 0 0;
+}
+.comp-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--warm-3);
+  vertical-align: top;
+}
+.comp-table tr:last-child td { border-bottom: none; }
+.comp-table .feat { font-weight: 600; color: var(--ink); }
+.comp-table .yes { color: var(--forest); font-weight: 600; }
+.comp-table .no { color: var(--ink-5); }
+.comp-table .partial { color: var(--amber); font-weight: 500; }
+.comp-table .us-col {
+  background: var(--burnt-light);
+}
+.comp-table .check { font-size: 12px; }
+
+/* === CALLOUT === */
+.callout {
+  border-left: 3px solid var(--burnt);
+  background: var(--burnt-light);
+  padding: 8px 14px;
+  border-radius: 0 6px 6px 0;
+  margin: 3mm 0;
+}
+.callout p { margin: 0; font-size: 10px; }
+.callout .callout-title {
+  font-weight: 700;
+  color: var(--burnt);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+
+/* === APPROACH PILLARS === */
+.pillar-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin: 2mm 0;
+}
+.pillar {
+  padding: 10px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--warm-3);
+  background: var(--warm);
+}
+.pillar-num {
+  font-family: 'Newsreader', serif;
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--burnt);
+  line-height: 1;
+  margin-bottom: 3px;
+}
+.pillar h4 {
+  font-size: 10px;
+  font-weight: 700;
+  margin-bottom: 3px;
+  color: var(--ink);
+}
+.pillar p {
+  font-size: 8.5px;
+  color: var(--ink-3);
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* === TWO-COL TEXT === */
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+/* === DIFF HIGHLIGHTS === */
+.diff-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 2mm 0;
+}
+.diff-card {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid;
+}
+.diff-them {
+  background: #f9fafb;
+  border-color: #e5e7eb;
+}
+.diff-us {
+  background: var(--burnt-light);
+  border-color: var(--burnt);
+}
+.diff-card h4 {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.diff-them h4 { color: var(--ink-4); }
+.diff-us h4 { color: var(--burnt); }
+.diff-card ul {
+  list-style: none;
+  padding: 0;
+}
+.diff-card li {
+  font-size: 8.5px;
+  padding: 2px 0;
+  color: var(--ink-2);
+  display: flex;
+  gap: 4px;
+  line-height: 1.4;
+}
+.diff-card li span {
+  flex-shrink: 0;
+  font-weight: 700;
+}
+.diff-them li span { color: var(--ink-5); }
+.diff-us li span { color: var(--burnt); }
+
+/* === FOOTER === */
+.page-foot {
+  position: absolute;
+  bottom: 10mm; left: 18mm; right: 18mm;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 6px;
+  border-top: 1px solid var(--rule);
+  font-size: 7.5px;
+  color: var(--ink-5);
+}
+.page-foot a { color: var(--burnt); text-decoration: none; font-weight: 500; }
+
+/* === PRINT === */
+@media print {
+  body { background: white; }
+  .page { width: 100%; min-height: 100vh; max-height: 100vh; margin: 0; box-shadow: none; }
+}
+@media screen {
+  body { background: #ddd; padding: 20px 0; }
+  .page { margin: 0 auto 20px; box-shadow: 0 1px 16px rgba(0,0,0,0.1); }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<!-- PAGE 1: THE PROBLEM + ARCHITECTURE                           -->
+<!-- ============================================================ -->
+<div class="page">
+  <div class="masthead">
+    <div class="masthead-logo">
+      <div class="masthead-mark">W</div>
+      <div class="masthead-name">Walacor Gateway</div>
+    </div>
+    <div class="masthead-type">Solution Brief</div>
+  </div>
+
+  <div class="headline">The AI Governance Gap<br><em>Is a Ticking Time Bomb</em></div>
+  <p class="deck">Enterprises are deploying AI faster than they can govern it. Every unmonitored AI request is a potential compliance violation, data leak, or audit failure waiting to happen. You need governance that works today &mdash; not after a six-month integration project.</p>
+
+  <h2>The <em>Problem</em></h2>
+  <p>Organizations face four critical risks when deploying AI models without a governance layer:</p>
+
+  <div class="problem-grid">
+    <div class="problem-card">
+      <div class="p-title">No Audit Trail</div>
+      <p class="p-body">AI requests and responses vanish after delivery. When regulators ask "what did your AI say to customers last quarter?" &mdash; there is no answer. No record exists of what was asked, what was answered, or which model responded.</p>
+    </div>
+    <div class="problem-card">
+      <div class="p-title">No Content Safety</div>
+      <p class="p-body">PII, toxic content, and unsafe material flow freely between applications and models. A customer's social security number sent to an external API is a breach you won't know about until it's too late.</p>
+    </div>
+    <div class="problem-card">
+      <div class="p-title">No Access Control</div>
+      <p class="p-body">Any application can call any model with any prompt. There's no policy enforcement, no budget limits, no model allowlists. Developers route to whichever model they choose &mdash; including unauthorized ones.</p>
+    </div>
+    <div class="problem-card">
+      <div class="p-title">No Proof of Integrity</div>
+      <p class="p-body">Even if you log AI interactions, those logs can be edited or deleted. There's no cryptographic guarantee that records haven't been tampered with. For regulated industries, "trust us" isn't sufficient.</p>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <h2>The <em>Solution</em></h2>
+  <p>Walacor Gateway is a transparent proxy that sits between your applications and AI models. It adds security, compliance, and cryptographic proof to every AI interaction &mdash; with <span class="strong">zero code changes</span> to your applications.</p>
+
+  <!-- ARCHITECTURE DIAGRAM -->
+  <div class="arch-wrap">
+    <div class="arch-label">Architecture Overview</div>
+    <div class="arch-flow">
+      <div class="arch-stack">
+        <div class="arch-box ab-app">Chat App</div>
+        <div class="arch-box ab-app">AI Agents</div>
+        <div class="arch-box ab-app">Internal Tools</div>
+      </div>
+      <div class="arch-arrow">&rarr;<br>&rarr;<br>&rarr;</div>
+      <div class="arch-gateway">
+        <div class="arch-gw-title">Walacor Gateway</div>
+        <div class="arch-gw-caps">
+          <div class="arch-cap ac-1"><div class="arch-cap-dot"></div>Verify Model Identity</div>
+          <div class="arch-cap ac-2"><div class="arch-cap-dot"></div>Enforce Security Policies</div>
+          <div class="arch-cap ac-3"><div class="arch-cap-dot"></div>Scan for Unsafe Content</div>
+          <div class="arch-cap ac-4"><div class="arch-cap-dot"></div>Link Every Conversation</div>
+          <div class="arch-cap ac-5"><div class="arch-cap-dot"></div>Record Everything</div>
+        </div>
+      </div>
+      <div class="arch-arrow">&rarr;<br>&rarr;<br>&rarr;</div>
+      <div class="arch-stack">
+        <div class="arch-box ab-model">OpenAI / GPT</div>
+        <div class="arch-box ab-model">Anthropic / Claude</div>
+        <div class="arch-box ab-model">Ollama / Local</div>
+      </div>
+    </div>
+    <div class="arch-audit">
+      <div class="arch-audit-arrow">&darr;</div>
+      <div class="arch-audit-box">Tamper-Proof Audit Trail &middot; SHA3-512 Session Chain</div>
+    </div>
+  </div>
+
+  <p class="small muted">Your applications point to the gateway instead of the provider. The gateway handles authentication, policy enforcement, content scanning, and cryptographic record-keeping &mdash; then forwards the request to the appropriate AI model. The response follows the same governed path back.</p>
+
+  <div class="callout">
+    <div class="callout-title">Key Insight</div>
+    <p>Unlike SDK-based solutions that require code changes in every application, the gateway operates at the <span class="strong">infrastructure level</span>. Deploy once, govern everything. New applications are governed automatically the moment they connect.</p>
+  </div>
+
+  <div class="page-foot">
+    <span>Walacor Gateway &middot; Solution Brief &middot; Confidential</span>
+    <span>Page 1 of 4 &middot; <a href="#">walacor.com</a></span>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- PAGE 2: REQUEST FLOW + HOW IT WORKS                          -->
+<!-- ============================================================ -->
+<div class="page">
+  <div class="masthead">
+    <div class="masthead-logo">
+      <div class="masthead-mark">W</div>
+      <div class="masthead-name">Walacor Gateway</div>
+    </div>
+    <div class="masthead-type">How It Works</div>
+  </div>
+
+  <h2>What Happens to <em>Every Request</em></h2>
+  <p>Each AI request passes through five security checks &mdash; before and after the model responds. This is not sampling or best-effort monitoring. The completeness middleware guarantees that <span class="strong">every single request</span> produces an audit record, even if the request fails or the connection drops.</p>
+
+  <div class="flow-wrap">
+    <div class="arch-label">Request Pipeline</div>
+    <div class="flow-steps">
+      <div class="flow-step fs-blue">
+        <div class="flow-num">&bull;</div>
+        <div class="flow-body">
+          <div class="flow-title">Request Arrives</div>
+          <div class="flow-desc">Application sends a prompt to an AI model via the gateway's OpenAI-compatible endpoint</div>
+        </div>
+        <div></div>
+      </div>
+      <div class="flow-conn"></div>
+      <div class="flow-step fs-green">
+        <div class="flow-num">1</div>
+        <div class="flow-body">
+          <div class="flow-title">Verify Model Identity</div>
+          <div class="flow-desc">Is this an approved, attested AI model? Unknown models are blocked before any data is sent.</div>
+        </div>
+        <div class="flow-badge fb-red">Blocks unknown</div>
+      </div>
+      <div class="flow-conn"></div>
+      <div class="flow-step fs-red">
+        <div class="flow-num">2</div>
+        <div class="flow-body">
+          <div class="flow-title">Enforce Security Policies</div>
+          <div class="flow-desc">Does this request comply with organization policies? Rate limits, content rules, and budget checks applied.</div>
+        </div>
+        <div class="flow-badge fb-red">Blocks violations</div>
+      </div>
+      <div class="flow-conn"></div>
+      <div class="flow-step fs-gray">
+        <div class="flow-num">3</div>
+        <div class="flow-body">
+          <div class="flow-title">Forward to AI Model</div>
+          <div class="flow-desc">Request is sent to the actual AI provider. Supports streaming and non-streaming responses.</div>
+        </div>
+        <div></div>
+      </div>
+      <div class="flow-conn"></div>
+      <div class="flow-step fs-purple">
+        <div class="flow-num">4</div>
+        <div class="flow-body">
+          <div class="flow-title">Scan the Response</div>
+          <div class="flow-desc">Three independent analyzers run in parallel: PII detection, toxicity scoring, and Llama Guard safety classification.</div>
+        </div>
+        <div class="flow-badge fb-purple">3 analyzers</div>
+      </div>
+      <div class="flow-conn"></div>
+      <div class="flow-step fs-orange">
+        <div class="flow-num">5</div>
+        <div class="flow-body">
+          <div class="flow-title">Cryptographic Record</div>
+          <div class="flow-desc">Record is hash-chained to the previous record in the session using SHA3-512. Written to tamper-proof storage.</div>
+        </div>
+        <div class="flow-badge fb-orange">SHA3-512</div>
+      </div>
+      <div class="flow-conn"></div>
+      <div class="flow-step fs-blue">
+        <div class="flow-num">&bull;</div>
+        <div class="flow-body">
+          <div class="flow-title">Response Returned</div>
+          <div class="flow-desc">Clean, governed response is delivered back to the calling application.</div>
+        </div>
+        <div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <h3>Completeness Guarantee</h3>
+      <p class="small">The completeness middleware wraps the entire pipeline in a <code>try/finally</code> block. Whether a request succeeds, fails, gets denied by policy, or drops mid-stream &mdash; an attempt record is always written. This means your audit trail has <span class="strong">zero gaps</span>. Every request that touched the gateway is accounted for.</p>
+      <p class="small">Execution records contain the full prompt, full response, model identity, content analysis verdicts, policy decisions, token usage, and session chain hashes. Attempt records capture request metadata even when the request never reaches a model.</p>
+    </div>
+    <div>
+      <h3>Session Chain Integrity</h3>
+      <p class="small">Every record in a conversation links to the previous one via a cryptographic hash. The formula chains six fields &mdash; execution ID, policy version, policy result, previous hash, sequence number, and timestamp &mdash; into a SHA3-512 digest.</p>
+      <p class="small">If anyone modifies a record after the fact &mdash; changing a response, altering a policy verdict, or deleting a turn &mdash; the chain breaks. The lineage dashboard detects this instantly and highlights exactly which record was tampered with. This gives auditors <span class="strong">mathematical proof</span> of integrity, not just a promise.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">Why This Matters for Compliance</div>
+    <p>Regulations like the EU AI Act, SOC 2, HIPAA, and industry-specific frameworks increasingly require organizations to demonstrate that AI systems are governed, monitored, and auditable. A log file is not sufficient &mdash; regulators want proof that logs haven't been tampered with. Walacor Gateway's cryptographic session chain provides exactly this: a Merkle-chain audit trail where any modification is mathematically detectable.</p>
+  </div>
+
+  <div class="page-foot">
+    <span>Walacor Gateway &middot; Solution Brief &middot; Confidential</span>
+    <span>Page 2 of 4 &middot; <a href="#">walacor.com</a></span>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- PAGE 3: COMPETITIVE LANDSCAPE                                -->
+<!-- ============================================================ -->
+<div class="page">
+  <div class="masthead">
+    <div class="masthead-logo">
+      <div class="masthead-mark">W</div>
+      <div class="masthead-name">Walacor Gateway</div>
+    </div>
+    <div class="masthead-type">Competitive Analysis</div>
+  </div>
+
+  <h2>How We <em>Compare</em></h2>
+  <p>The AI infrastructure market has several players, but most focus on a single dimension &mdash; observability, routing, or safety &mdash; while leaving critical gaps. Walacor Gateway is the only solution that combines governance, content safety, and <span class="strong">cryptographic proof of integrity</span> in a single, drop-in layer.</p>
+
+  <table class="comp-table">
+    <thead>
+      <tr>
+        <th style="width: 26%;">Capability</th>
+        <th class="us" style="width: 18.5%;">Walacor Gateway</th>
+        <th style="width: 18.5%;">LLM Proxies</th>
+        <th style="width: 18.5%;">Observability Tools</th>
+        <th style="width: 18.5%;">Safety Platforms</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="feat">Cryptographic audit chain</td>
+        <td class="us-col yes"><span class="check">&check;</span> SHA3-512 Merkle chain</td>
+        <td class="no">&times; Not offered</td>
+        <td class="no">&times; Mutable logs only</td>
+        <td class="no">&times; Not offered</td>
+      </tr>
+      <tr>
+        <td class="feat">Tamper detection</td>
+        <td class="us-col yes"><span class="check">&check;</span> Instant, mathematical</td>
+        <td class="no">&times; None</td>
+        <td class="partial">~ Log integrity checks</td>
+        <td class="no">&times; None</td>
+      </tr>
+      <tr>
+        <td class="feat">Content safety (PII, toxicity)</td>
+        <td class="us-col yes"><span class="check">&check;</span> 3 parallel analyzers</td>
+        <td class="no">&times; Not offered</td>
+        <td class="no">&times; Not offered</td>
+        <td class="yes"><span class="check">&check;</span> Core feature</td>
+      </tr>
+      <tr>
+        <td class="feat">LLM-based safety (Llama Guard)</td>
+        <td class="us-col yes"><span class="check">&check;</span> 14 categories</td>
+        <td class="no">&times; Not offered</td>
+        <td class="no">&times; Not offered</td>
+        <td class="partial">~ Some offer this</td>
+      </tr>
+      <tr>
+        <td class="feat">Multi-provider routing</td>
+        <td class="us-col yes"><span class="check">&check;</span> OpenAI, Anthropic, Ollama</td>
+        <td class="yes"><span class="check">&check;</span> Core feature</td>
+        <td class="partial">~ Via integration</td>
+        <td class="no">&times; Not a proxy</td>
+      </tr>
+      <tr>
+        <td class="feat">Local model support</td>
+        <td class="us-col yes"><span class="check">&check;</span> Ollama native adapter</td>
+        <td class="partial">~ Limited</td>
+        <td class="no">&times; Cloud only</td>
+        <td class="no">&times; Cloud only</td>
+      </tr>
+      <tr>
+        <td class="feat">Policy enforcement</td>
+        <td class="us-col yes"><span class="check">&check;</span> Pre- and post-forward</td>
+        <td class="partial">~ Basic rate limiting</td>
+        <td class="no">&times; Observe only</td>
+        <td class="partial">~ Content rules</td>
+      </tr>
+      <tr>
+        <td class="feat">Token budget management</td>
+        <td class="us-col yes"><span class="check">&check;</span> Per-user, per-tenant</td>
+        <td class="partial">~ Global limits</td>
+        <td class="yes"><span class="check">&check;</span> Usage tracking</td>
+        <td class="no">&times; Not offered</td>
+      </tr>
+      <tr>
+        <td class="feat">Tool call auditing (MCP)</td>
+        <td class="us-col yes"><span class="check">&check;</span> Full I/O + hashes</td>
+        <td class="no">&times; Prompt/response only</td>
+        <td class="partial">~ Partial</td>
+        <td class="no">&times; Not offered</td>
+      </tr>
+      <tr>
+        <td class="feat">Zero code changes</td>
+        <td class="us-col yes"><span class="check">&check;</span> Drop-in proxy</td>
+        <td class="yes"><span class="check">&check;</span> Drop-in proxy</td>
+        <td class="partial">~ SDK required</td>
+        <td class="partial">~ SDK required</td>
+      </tr>
+      <tr>
+        <td class="feat">100% request coverage</td>
+        <td class="us-col yes"><span class="check">&check;</span> Completeness guarantee</td>
+        <td class="partial">~ Best-effort</td>
+        <td class="partial">~ Sampling</td>
+        <td class="partial">~ Inline only</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <hr class="divider">
+
+  <h2>What Sets Us <em>Apart</em></h2>
+
+  <div class="diff-grid">
+    <div class="diff-card diff-them">
+      <h4>Typical LLM Proxy</h4>
+      <ul>
+        <li><span>&bull;</span> Routes requests between providers</li>
+        <li><span>&bull;</span> Logs to mutable datastores</li>
+        <li><span>&bull;</span> No content analysis</li>
+        <li><span>&bull;</span> No cryptographic integrity</li>
+        <li><span>&bull;</span> Cloud-only model support</li>
+        <li><span>&bull;</span> No policy enforcement beyond rate limits</li>
+      </ul>
+    </div>
+    <div class="diff-card diff-us">
+      <h4>Walacor Gateway</h4>
+      <ul>
+        <li><span>&check;</span> Routes + governs + audits every request</li>
+        <li><span>&check;</span> SHA3-512 Merkle chain &mdash; tamper-proof by design</li>
+        <li><span>&check;</span> 3 content analyzers (PII, toxicity, Llama Guard)</li>
+        <li><span>&check;</span> Mathematical proof of record integrity</li>
+        <li><span>&check;</span> Cloud + local models (Ollama native support)</li>
+        <li><span>&check;</span> Pre-forward + post-forward policy enforcement</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">The Fundamental Difference</div>
+    <p>Other solutions tell you what happened. Walacor Gateway <span class="strong">proves</span> what happened. The difference is a cryptographic session chain that makes record tampering mathematically impossible to hide. This is the difference between a log file and a legal-grade audit trail.</p>
+  </div>
+
+  <div class="page-foot">
+    <span>Walacor Gateway &middot; Solution Brief &middot; Confidential</span>
+    <span>Page 3 of 4 &middot; <a href="#">walacor.com</a></span>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- PAGE 4: OUR APPROACH + DEPLOYMENT                            -->
+<!-- ============================================================ -->
+<div class="page">
+  <div class="masthead">
+    <div class="masthead-logo">
+      <div class="masthead-mark">W</div>
+      <div class="masthead-name">Walacor Gateway</div>
+    </div>
+    <div class="masthead-type">Our Approach</div>
+  </div>
+
+  <h2>Why Our Approach <em>Works</em></h2>
+  <p>We designed the gateway around three principles that address the fundamental challenges of AI governance at scale:</p>
+
+  <div class="pillar-grid">
+    <div class="pillar">
+      <div class="pillar-num">01</div>
+      <h4>Infrastructure, Not SDK</h4>
+      <p>Governance belongs at the infrastructure layer, not embedded in application code. An SDK requires every team to adopt it, configure it correctly, and keep it updated. A gateway governs everything that passes through it &mdash; automatically. New apps are covered the moment they connect. No code reviews, no library updates, no compliance gaps between teams.</p>
+    </div>
+    <div class="pillar">
+      <div class="pillar-num">02</div>
+      <h4>Prove, Don't Promise</h4>
+      <p>Logging is not auditing. Any system that stores records in a mutable database can have those records altered. Our SHA3-512 session chain creates a Merkle-chain where each record's hash depends on the previous one. Tampering with any record breaks the chain forward &mdash; and the dashboard shows exactly where. This gives auditors mathematical certainty, not organizational trust.</p>
+    </div>
+    <div class="pillar">
+      <div class="pillar-num">03</div>
+      <h4>Fail-Safe by Default</h4>
+      <p>The gateway is designed so that security failures are visible, not silent. Content analyzers are fail-open to avoid blocking production traffic, but every failure is recorded. The completeness middleware guarantees an audit record even when requests crash. Budget enforcement uses atomic operations to prevent race conditions. Every design decision prioritizes <em>never losing a record</em> over performance.</p>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <h2>Real-World <em>Capabilities</em></h2>
+
+  <div class="two-col">
+    <div>
+      <h3>Content Safety Pipeline</h3>
+      <p class="small">Three independent analyzers scan every AI response in parallel:</p>
+      <p class="small"><span class="strong">PII Scanner</span> &mdash; Detects personal identifiable information (emails, phone numbers, SSNs, credit cards) using pattern matching. Catches data leakage before it reaches your application.</p>
+      <p class="small"><span class="strong">Toxicity Analyzer</span> &mdash; Scores content for harmful, offensive, or inappropriate material using keyword and pattern analysis.</p>
+      <p class="small"><span class="strong">Llama Guard 3</span> &mdash; Meta's 14-category safety classifier (S1&ndash;S14) running locally via Ollama. Covers violence, sexual content, child safety, self-harm, illegal activities, and more. Child safety violations (S4) trigger immediate blocks; other categories produce warnings.</p>
+      <p class="small muted">All three run in parallel, so latency impact is minimal. Results are stored alongside the execution record for compliance review.</p>
+    </div>
+    <div>
+      <h3>Tool-Aware Auditing</h3>
+      <p class="small">Modern AI agents don't just generate text &mdash; they call tools, search the web, and interact with external systems. The gateway audits these interactions too:</p>
+      <p class="small"><span class="strong">MCP Protocol Support</span> &mdash; Full Model Context Protocol integration. Tool calls are intercepted, executed, and recorded with input/output hash pairs (SHA3-512).</p>
+      <p class="small"><span class="strong">Built-in Web Search</span> &mdash; Native web search tool that agents can invoke. Search queries, results, and source URLs are all captured in the audit trail.</p>
+      <p class="small"><span class="strong">Content Analysis on Tool Output</span> &mdash; Tool results pass through the same PII and toxicity analyzers as model responses. A tool that returns sensitive data is flagged just like a model response would be.</p>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <h2>Deploy in <em>Minutes</em></h2>
+  <p>The gateway works with your existing infrastructure. No agents to install on application servers, no SDK changes, no database migrations.</p>
+
+  <div class="pillar-grid">
+    <div class="pillar" style="text-align: center;">
+      <div class="pillar-num">1</div>
+      <h4>Install</h4>
+      <p style="font-family: 'Geist Mono', monospace; font-size: 8px; background: #f3f4f6; padding: 4px 8px; border-radius: 4px; display: inline-block;">pip install walacor-gateway</p>
+      <p style="margin-top: 4px;">Or pull the Docker image for containerized environments.</p>
+    </div>
+    <div class="pillar" style="text-align: center;">
+      <div class="pillar-num">2</div>
+      <h4>Configure</h4>
+      <p style="font-family: 'Geist Mono', monospace; font-size: 8px; background: #f3f4f6; padding: 4px 8px; border-radius: 4px; display: inline-block;">export WALACOR_*=&hellip;</p>
+      <p style="margin-top: 4px;">Environment variables for providers, policies, and features. Sensible defaults for everything.</p>
+    </div>
+    <div class="pillar" style="text-align: center;">
+      <div class="pillar-num">3</div>
+      <h4>Point &amp; Run</h4>
+      <p style="font-family: 'Geist Mono', monospace; font-size: 8px; background: #f3f4f6; padding: 4px 8px; border-radius: 4px; display: inline-block;">walacor-gateway</p>
+      <p style="margin-top: 4px;">Update your apps' base URL from the provider to the gateway. That's it.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">Deployment Options</div>
+    <p><span class="strong">Docker / Docker Compose</span> for development and small teams. <span class="strong">Kubernetes + Helm</span> for production-grade deployments with horizontal scaling. <span class="strong">Bare metal</span> for air-gapped or on-premise environments. Redis backend available for multi-instance state sharing. The gateway runs on a single port (8000) and serves all providers from one endpoint.</p>
+  </div>
+
+  <div style="text-align: center; margin-top: 4mm;">
+    <p class="small muted" style="max-width: 400px; margin: 0 auto;">Walacor Gateway is open-source and designed for enterprises that take AI governance seriously. Every request governed. Every record proven. Zero code changes.</p>
+  </div>
+
+  <div class="page-foot">
+    <span>Walacor Gateway &middot; Solution Brief &middot; Confidential</span>
+    <span>Page 4 of 4 &middot; <a href="#">walacor.com</a></span>
+  </div>
+</div>
+
+</body>
+</html>

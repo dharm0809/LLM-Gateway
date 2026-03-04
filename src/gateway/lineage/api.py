@@ -1,0 +1,97 @@
+"""Lineage API route handlers: read-only endpoints for audit trail browsing."""
+
+from __future__ import annotations
+
+import logging
+
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from gateway.pipeline.context import get_pipeline_context
+
+logger = logging.getLogger(__name__)
+
+
+def _reader_or_503():
+    """Return lineage reader or raise 503 JSONResponse."""
+    ctx = get_pipeline_context()
+    if ctx.lineage_reader is None:
+        return None
+    return ctx.lineage_reader
+
+
+async def lineage_sessions(request: Request) -> JSONResponse:
+    """GET /v1/lineage/sessions — list sessions with record count and last activity."""
+    reader = _reader_or_503()
+    if reader is None:
+        return JSONResponse({"error": "Lineage reader not available"}, status_code=503)
+    limit = min(int(request.query_params.get("limit", "50")), 200)
+    offset = int(request.query_params.get("offset", "0"))
+    try:
+        sessions = reader.list_sessions(limit=limit, offset=offset)
+        return JSONResponse({"sessions": sessions, "limit": limit, "offset": offset})
+    except Exception as e:
+        logger.error("lineage_sessions error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def lineage_session_timeline(request: Request) -> JSONResponse:
+    """GET /v1/lineage/sessions/{session_id} — timeline of executions for one session."""
+    reader = _reader_or_503()
+    if reader is None:
+        return JSONResponse({"error": "Lineage reader not available"}, status_code=503)
+    session_id = request.path_params["session_id"]
+    try:
+        records = reader.get_session_timeline(session_id)
+        if not records:
+            return JSONResponse({"error": "Session not found", "session_id": session_id}, status_code=404)
+        return JSONResponse({"session_id": session_id, "records": records, "count": len(records)})
+    except Exception as e:
+        logger.error("lineage_session_timeline error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def lineage_execution(request: Request) -> JSONResponse:
+    """GET /v1/lineage/executions/{execution_id} — full execution record + tool events."""
+    reader = _reader_or_503()
+    if reader is None:
+        return JSONResponse({"error": "Lineage reader not available"}, status_code=503)
+    execution_id = request.path_params["execution_id"]
+    try:
+        record = reader.get_execution(execution_id)
+        if record is None:
+            return JSONResponse({"error": "Execution not found", "execution_id": execution_id}, status_code=404)
+        tool_events = reader.get_tool_events(execution_id)
+        return JSONResponse({"record": record, "tool_events": tool_events})
+    except Exception as e:
+        logger.error("lineage_execution error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def lineage_attempts(request: Request) -> JSONResponse:
+    """GET /v1/lineage/attempts — recent attempt records + disposition stats."""
+    reader = _reader_or_503()
+    if reader is None:
+        return JSONResponse({"error": "Lineage reader not available"}, status_code=503)
+    limit = min(int(request.query_params.get("limit", "100")), 500)
+    offset = int(request.query_params.get("offset", "0"))
+    try:
+        data = reader.get_attempts(limit=limit, offset=offset)
+        return JSONResponse(data)
+    except Exception as e:
+        logger.error("lineage_attempts error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def lineage_verify(request: Request) -> JSONResponse:
+    """GET /v1/lineage/verify/{session_id} — server-side chain verification."""
+    reader = _reader_or_503()
+    if reader is None:
+        return JSONResponse({"error": "Lineage reader not available"}, status_code=503)
+    session_id = request.path_params["session_id"]
+    try:
+        result = reader.verify_chain(session_id)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error("lineage_verify error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)

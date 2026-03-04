@@ -62,6 +62,27 @@ class ToolRegistry:
         self._clients.clear()
         self._tool_map.clear()
 
+    async def register_builtin_client(self, name: str, client: Any) -> None:
+        """Register a built-in tool client (Python callable, no MCP transport needed).
+
+        The client must implement:
+          get_tools() -> list[ToolDefinition]
+          async call_tool(name, arguments, timeout_ms) -> ToolResult
+        """
+        self._clients[name] = client
+        for tool in client.get_tools():
+            if tool.name in self._tool_map:
+                existing = self._tool_map[tool.name]
+                existing_name = getattr(getattr(existing, "_config", None), "name", name)
+                raise RuntimeError(
+                    f"Built-in tool '{tool.name}' conflicts with tool from '{existing_name}'"
+                )
+            self._tool_map[tool.name] = client
+        logger.info(
+            "Built-in tool client '%s' registered: tools=%s",
+            name, [t.name for t in client.get_tools()],
+        )
+
     # ── Queries ───────────────────────────────────────────────────────────────
 
     def get_tool_definitions(self) -> list[dict[str, Any]]:

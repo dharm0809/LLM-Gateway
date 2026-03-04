@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 
@@ -38,7 +38,7 @@ class BudgetTracker:
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
         # key: (tenant_id, user | "") -> BudgetState
         self._states: dict[tuple[str, str], BudgetState] = {}
 
@@ -49,20 +49,23 @@ class BudgetTracker:
         period: str,
         max_tokens: int,
     ) -> None:
-        """Set or update a budget. max_tokens=0 means unlimited."""
+        """Set or update a budget. max_tokens=0 means unlimited. Called at startup only."""
         key = (tenant_id, user or "")
         now = datetime.now(timezone.utc)
-        with self._lock:
-            existing = self._states.get(key)
-            if existing is None or existing.period != period:
-                self._states[key] = BudgetState(
-                    period=period,
-                    period_start=_period_start(period, now),
-                    tokens_used=0,
-                    max_tokens=max_tokens,
-                )
-            else:
-                existing.max_tokens = max_tokens
+        existing = self._states.get(key)
+        if existing is None or existing.period != period:
+            self._states[key] = BudgetState(
+                period=period,
+                period_start=_period_start(period, now),
+                tokens_used=0,
+                max_tokens=max_tokens,
+            )
+        else:
+            existing.max_tokens = max_tokens
+
+    def remove(self, tenant_id: str, user: str | None) -> None:
+        """Remove a budget key. Used by control plane when a budget is deleted."""
+        self._states.pop((tenant_id, user or ""), None)
 
     async def check_and_reserve(
         self,
@@ -81,7 +84,7 @@ class BudgetTracker:
         """
         key = (tenant_id, user or "")
         now = datetime.now(timezone.utc)
-        with self._lock:
+        async with self._lock:
             state = self._states.get(key)
             if state is None:
                 # No budget configured — allow
@@ -116,7 +119,7 @@ class BudgetTracker:
             return
         key = (tenant_id, user or "")
         now = datetime.now(timezone.utc)
-        with self._lock:
+        async with self._lock:
             state = self._states.get(key)
             if state is None:
                 return
@@ -125,10 +128,10 @@ class BudgetTracker:
                 state.period_start = _period_start(state.period, now)
             state.tokens_used = max(0, state.tokens_used + delta)
 
-    def get_snapshot(self, tenant_id: str, user: str | None = None) -> dict | None:
+    async def get_snapshot(self, tenant_id: str, user: str | None = None) -> dict | None:
         """Return current usage snapshot for health/metrics. None if no budget configured."""
         key = (tenant_id, user or "")
-        with self._lock:
+        async with self._lock:
             state = self._states.get(key)
             if state is None:
                 return None
@@ -143,9 +146,9 @@ class BudgetTracker:
                 ),
             }
 
-    def all_snapshots(self) -> list[dict]:
+    async def all_snapshots(self) -> list[dict]:
         """All active budget states (for health endpoint)."""
-        with self._lock:
+        async with self._lock:
             return [
                 {
                     "tenant_id": k[0],
@@ -158,6 +161,7 @@ class BudgetTracker:
             ]
 
 
+# Lua: atomic check-and-reserve. Returns {allowed(0|1), remaining}.
 _LUA_CHECK_AND_RESERVE = """
 local key = KEYS[1]
 local max_tokens = tonumber(ARGV[1])
@@ -173,21 +177,38 @@ redis.call('EXPIRE', key, expire_secs)
 return {1, max_tokens - new_val}
 """
 
+# Lua: atomic floor-clamped delta adjustment. Returns new counter value.
+# Uses math.max(0, current + delta) so DECRBY can never produce a negative counter,
+# which would effectively grant extra budget on subsequent check_and_reserve calls.
+_LUA_ADJUST_USAGE = """
+local key = KEYS[1]
+local delta = tonumber(ARGV[1])
+local expire_secs = tonumber(ARGV[2])
+local current = tonumber(redis.call('GET', key) or 0)
+local new_val = math.max(0, current + delta)
+redis.call('SET', key, tostring(new_val))
+redis.call('EXPIRE', key, expire_secs)
+return new_val
+"""
+
 
 class RedisBudgetTracker:
     """Redis-backed token budget tracker for multi-replica deployments.
 
     Uses a Lua script for atomic check-and-reserve per period key.
+    Uses a second Lua script for floor-clamped delta adjustment in record_usage,
+    preventing concurrent refunds from driving the counter below zero.
     """
 
     def __init__(self, redis_client, period: str, max_tokens: int) -> None:
         self._r = redis_client
         self._period = period  # "daily" | "monthly"
         self._max_tokens = max_tokens
-        # Stores (key, ttl) used in the most recent check_and_reserve per (tenant, user).
-        # asyncio is single-threaded so this is safe; within a period all keys are identical
-        # so concurrent requests for the same tenant don't produce incorrect results.
-        self._reservation_keys: dict[tuple[str, str], tuple[str, int]] = {}
+        # Stores per-(tenant, user) FIFO list of (key, ttl) from check_and_reserve.
+        # Using a list instead of a single value ensures concurrent requests for the
+        # same tenant/user get their own reservation key rather than overwriting
+        # each other's entry. FIFO order matches the reservation order.
+        self._reservation_keys: dict[tuple[str, str], list[tuple[str, int]]] = {}
 
     def _period_key(self, tenant_id: str, user: str | None) -> tuple[str, int]:
         """Returns (redis_key, ttl_seconds)."""
@@ -214,7 +235,8 @@ class RedisBudgetTracker:
         key = f"gateway:budget:{tenant_id}:{user or ''}:{period_str}"
         return key, ttl
 
-    async def configure(self, tenant_id: str, period: str, max_tokens: int) -> None:
+    def configure(self, tenant_id: str, user: str | None, period: str, max_tokens: int) -> None:
+        """Update budget config. No I/O — safe to call without await."""
         self._period = period
         self._max_tokens = max_tokens
 
@@ -222,14 +244,28 @@ class RedisBudgetTracker:
         self, tenant_id: str, user: str | None, estimated: int
     ) -> tuple[bool, int]:
         key, ttl = self._period_key(tenant_id, user)
-        # Store the key so record_usage applies the delta to the same period key,
-        # avoiding a mismatch if the period rolls over between the two calls.
-        self._reservation_keys[(tenant_id, user or "")] = (key, ttl)
-        result = await self._r.eval(
-            _LUA_CHECK_AND_RESERVE, 1, key,
-            str(self._max_tokens), str(estimated), str(ttl),
-        )
-        return bool(result[0]), int(result[1])
+        # Append to FIFO queue so concurrent requests for the same tenant/user
+        # each get their own reservation slot in record_usage.
+        ukey = (tenant_id, user or "")
+        self._reservation_keys.setdefault(ukey, []).append((key, ttl))
+        try:
+            result = await self._r.eval(
+                _LUA_CHECK_AND_RESERVE, 1, key,
+                str(self._max_tokens), str(estimated), str(ttl),
+            )
+            return bool(result[0]), int(result[1])
+        except Exception:
+            # Pop the key we just appended since the reservation failed.
+            queue = self._reservation_keys.get(ukey, [])
+            if queue:
+                queue.pop()
+            if not queue:
+                self._reservation_keys.pop(ukey, None)
+            logger.error(
+                "Redis budget check_and_reserve failed: tenant_id=%s estimated=%d — failing open",
+                tenant_id, estimated, exc_info=True,
+            )
+            return True, -1  # fail-open: allow request, unlimited sentinel
 
     async def record_usage(
         self, tenant_id: str, user: str | None, actual_tokens: int, estimated: int = 0
@@ -238,35 +274,38 @@ class RedisBudgetTracker:
 
         check_and_reserve reserved `estimated` tokens via the Lua script.
         This corrects the counter when actual usage differs from the estimate.
-        Uses the key captured at reservation time to avoid period-boundary mismatch.
+        Uses the key captured at reservation time (FIFO) to avoid period-boundary
+        mismatch if the period rolls over between reserve and record.
+
+        Uses a Lua script for atomic floor clamping: DECRBY without a floor can
+        drive the counter negative, effectively granting extra budget on the next
+        check_and_reserve call.
         """
         delta = actual_tokens - estimated
         if delta == 0:
             return
         ukey = (tenant_id, user or "")
-        key_ttl = self._reservation_keys.pop(ukey, None)
-        if key_ttl:
-            key, ttl = key_ttl
+        queue = self._reservation_keys.get(ukey, [])
+        if queue:
+            key, ttl = queue.pop(0)  # FIFO: consume oldest reservation
+            if not queue:
+                self._reservation_keys.pop(ukey, None)
         else:
             key, ttl = self._period_key(tenant_id, user)
         try:
-            async with self._r.pipeline(transaction=False) as pipe:
-                if delta > 0:
-                    pipe.incrby(key, delta)
-                else:
-                    pipe.decrby(key, -delta)
-                pipe.expire(key, ttl)
-                await pipe.execute()
+            await self._r.eval(
+                _LUA_ADJUST_USAGE, 1, key, str(delta), str(ttl),
+            )
         except Exception:
             logger.error(
                 "Redis budget record_usage failed: tenant_id=%s user=%s delta=%d",
                 tenant_id, user, delta, exc_info=True,
             )
 
-    def get_snapshot(self, tenant_id: str, user: str | None = None) -> dict | None:
+    async def get_snapshot(self, tenant_id: str, user: str | None = None) -> dict | None:
         return None  # not implemented for Redis tracker
 
-    def all_snapshots(self) -> list[dict]:
+    async def all_snapshots(self) -> list[dict]:
         return []
 
 

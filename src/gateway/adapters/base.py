@@ -51,6 +51,8 @@ class ModelResponse:
     # Phase 14: tool-aware fields
     tool_interactions: list[ToolInteraction] | None = None  # tool calls captured from this response
     has_pending_tool_calls: bool = False                    # active strategy: LLM is requesting tool execution
+    # Phase 17: reasoning model fields
+    thinking_content: str | None = None                    # extracted <think>...</think> blocks (reasoning models)
 
 
 class ProviderAdapter(ABC):

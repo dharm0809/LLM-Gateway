@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import httpx
 from starlette.requests import Request
@@ -12,6 +13,8 @@ from gateway.adapters.base import ModelCall, ModelResponse, ProviderAdapter
 from gateway.config import get_settings
 from gateway.pipeline.context import get_pipeline_context
 from gateway.metrics.prometheus import forward_duration
+
+logger = logging.getLogger(__name__)
 
 
 def _http_client() -> httpx.AsyncClient:
@@ -42,10 +45,12 @@ async def forward(
             upstream_resp = await client.send(upstream_req)
     forward_duration.labels(provider=adapter.get_provider_name()).observe(time.perf_counter() - t0)
     model_response = adapter.parse_response(upstream_resp)
+    resp_headers = dict(upstream_resp.headers)
+    resp_headers["X-Session-Id"] = call.metadata.get("session_id", "")
     response = Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
-        headers=dict(upstream_resp.headers),
+        headers=resp_headers,
     )
     return response, model_response
 
@@ -107,6 +112,10 @@ async def stream_with_tee(
                 yield chunk
         except BaseException as e:
             _exc = e
+            logger.warning(
+                "Upstream stream interrupted: provider=%s error=%s",
+                adapter.get_provider_name(), e, exc_info=True,
+            )
             raise
         finally:
             if _exc is not None:
@@ -116,10 +125,25 @@ async def stream_with_tee(
             if _owned_client is not None:
                 await _owned_client.aclose()
             forward_duration.labels(provider=adapter.get_provider_name()).observe(time.perf_counter() - t0)
+            # Run the background task here (not via StreamingResponse.background) so it
+            # always executes even when the stream is interrupted before completion.
+            # Starlette only calls StreamingResponse.background after normal iteration end.
+            if background_task is not None:
+                try:
+                    await background_task()
+                except Exception:
+                    logger.error(
+                        "Stream background task failed: provider=%s",
+                        adapter.get_provider_name(), exc_info=True,
+                    )
 
     return StreamingResponse(
         generate(),
         status_code=actual_status,
-        headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"},
-        background=background_task,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "X-Session-Id": call.metadata.get("session_id", ""),
+        },
+        background=None,  # task runs in generate()'s finally — see above
     ), buffer

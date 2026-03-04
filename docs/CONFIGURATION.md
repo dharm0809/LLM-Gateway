@@ -1,26 +1,61 @@
 # Gateway configuration
 
-All configuration is via environment variables (prefix `WALACOR_`). Required variables must be set or the gateway refuses to start.
+All configuration is via environment variables (prefix `WALACOR_`). The gateway loads `.env` or `.env.gateway` from the current working directory if present. Values in the environment override file values.
 
-## Required (when governance is on)
+## Required variables
 
-When `WALACOR_SKIP_GOVERNANCE` is false (default), the following are required:
+When `WALACOR_SKIP_GOVERNANCE` is false (default) and `WALACOR_CONTROL_PLANE_ENABLED` is false, the following are required:
 
 | Variable | Description |
 |----------|-------------|
 | `WALACOR_GATEWAY_TENANT_ID` | Tenant this gateway serves (single-tenant V1) |
-| `WALACOR_CONTROL_PLANE_URL` | Base URL of the control plane (e.g. `http://localhost:8000`) |
+| `WALACOR_CONTROL_PLANE_URL` | Base URL of a remote control plane |
+
+When `WALACOR_CONTROL_PLANE_ENABLED=true` (default), governance works without a remote control plane — models are auto-attested on first use and policies are managed locally via the embedded control plane.
 
 When `WALACOR_SKIP_GOVERNANCE=true`, both can be omitted (transparent proxy only).
 
-## Optional — identity and auth
+## Identity and auth
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `WALACOR_GATEWAY_TENANT_ID` | (empty) | Tenant this gateway serves |
 | `WALACOR_GATEWAY_ID` | auto (gw-&lt;uuid&gt;) | Unique gateway instance ID |
-| `WALACOR_GATEWAY_API_KEYS` | (empty) | Comma-separated API keys for caller auth (production) |
-| `WALACOR_CONTROL_PLANE_API_KEY` | (empty) | API key for gateway→control plane; sent as X-API-Key and Authorization: Bearer on sync and execution delivery. Required when control plane has WALACOR_API_KEYS set. |
-| `WALACOR_SKIP_GOVERNANCE` | false | If true, run as transparent proxy only (no attestation/policy/WAL); tenant and control plane URL not required |
+| `WALACOR_GATEWAY_API_KEYS` | (empty) | Comma-separated API keys for caller auth |
+| `WALACOR_CONTROL_PLANE_API_KEY` | (empty) | API key for gateway→control plane (X-API-Key / Bearer) |
+| `WALACOR_SKIP_GOVERNANCE` | false | If true, run as transparent proxy only |
+| `WALACOR_ENFORCEMENT_MODE` | enforced | `enforced` or `audit_only` |
+
+## Walacor backend storage
+
+When all three credentials are set, records go to Walacor backend AND local WAL (dual-write).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_SERVER` | (empty) | Walacor backend URL (e.g. `https://sandbox.walacor.com/api`) |
+| `WALACOR_USERNAME` | (empty) | Walacor backend username |
+| `WALACOR_PASSWORD` | (empty) | Walacor backend password |
+| `WALACOR_EXECUTIONS_ETID` | 9000001 | ETId for execution records table |
+| `WALACOR_ATTEMPTS_ETID` | 9000002 | ETId for attempts table |
+| `WALACOR_TOOL_EVENTS_ETID` | 9000003 | ETId for tool event records table |
+
+## Provider URLs and keys
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_GATEWAY_PROVIDER` | openai | Default provider for path-based routing |
+| `WALACOR_PROVIDER_OPENAI_URL` | https://api.openai.com | OpenAI API base URL |
+| `WALACOR_PROVIDER_OPENAI_KEY` | (empty) | API key for OpenAI |
+| `WALACOR_PROVIDER_ANTHROPIC_URL` | https://api.anthropic.com | Anthropic API base URL |
+| `WALACOR_PROVIDER_ANTHROPIC_KEY` | (empty) | API key for Anthropic |
+| `WALACOR_PROVIDER_OLLAMA_URL` | http://localhost:11434 | Ollama base URL |
+| `WALACOR_PROVIDER_OLLAMA_KEY` | (empty) | Ollama API key (usually empty for local) |
+| `WALACOR_PROVIDER_HUGGINGFACE_URL` | (empty) | HuggingFace Inference Endpoints URL |
+| `WALACOR_PROVIDER_HUGGINGFACE_KEY` | (empty) | HuggingFace API key |
+| `WALACOR_GENERIC_UPSTREAM_URL` | (empty) | Generic adapter upstream URL |
+| `WALACOR_GENERIC_MODEL_PATH` | $.model | JSON path for model ID |
+| `WALACOR_GENERIC_PROMPT_PATH` | $.messages[*].content | JSON path for prompt |
+| `WALACOR_GENERIC_RESPONSE_PATH` | $.choices[0].message.content | JSON path for response |
 
 ## Cache and sync
 
@@ -28,38 +63,99 @@ When `WALACOR_SKIP_GOVERNANCE=true`, both can be omitted (transparent proxy only
 |----------|---------|-------------|
 | `WALACOR_ATTESTATION_CACHE_TTL` | 300 | Attestation cache TTL (seconds) |
 | `WALACOR_POLICY_STALENESS_THRESHOLD` | 900 | Max policy staleness before fail-closed (seconds) |
-| `WALACOR_SYNC_INTERVAL` | 60 | Pull sync interval (seconds) — future use |
-| `WALACOR_GATEWAY_PROVIDER` | openai | Provider name for attestation sync (openai, anthropic, etc.) |
+| `WALACOR_SYNC_INTERVAL` | 60 | Pull sync interval seconds |
 
-## WAL
+## WAL (local SQLite audit log)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WALACOR_WAL_PATH` | /var/walacor/wal | WAL storage directory |
-| `WALACOR_WAL_MAX_SIZE_GB` | 10 | Max WAL disk usage (GB); when exceeded (enforced mode), gateway returns 503 and stops accepting new requests until WAL drains |
-| `WALACOR_WAL_MAX_AGE_HOURS` | 72 | Max WAL record age (hours) before action |
-| `WALACOR_WAL_HIGH_WATER_MARK` | 10000 | Max undelivered records; when exceeded (enforced mode), gateway returns 503 until backlog drains |
+| `WALACOR_WAL_MAX_SIZE_GB` | 10 | Max WAL disk usage (GB) |
+| `WALACOR_WAL_MAX_AGE_HOURS` | 72 | Max WAL record age (hours) |
+| `WALACOR_WAL_HIGH_WATER_MARK` | 10000 | Max undelivered records; gateway returns 503 when exceeded (enforced mode) |
 
-## Mode
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WALACOR_ENFORCEMENT_MODE` | enforced | `enforced` or `audit_only` |
-
-## Providers
+## Content analysis (Phase 10)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WALACOR_PROVIDER_OPENAI_URL` | https://api.openai.com | OpenAI API base URL |
-| `WALACOR_PROVIDER_OPENAI_KEY` | (empty) | API key for OpenAI |
-| `WALACOR_PROVIDER_ANTHROPIC_URL` | https://api.anthropic.com | Anthropic API base URL |
-| `WALACOR_PROVIDER_ANTHROPIC_KEY` | (empty) | API key for Anthropic |
-| `WALACOR_PROVIDER_HUGGINGFACE_URL` | (empty) | HuggingFace Inference Endpoints URL |
-| `WALACOR_PROVIDER_HUGGINGFACE_KEY` | (empty) | HuggingFace API key |
-| `WALACOR_GENERIC_UPSTREAM_URL` | (empty) | Generic adapter upstream URL |
-| `WALACOR_GENERIC_MODEL_PATH` | $.model | JSON path for model ID |
-| `WALACOR_GENERIC_PROMPT_PATH` | $.messages[*].content | JSON path for prompt |
-| `WALACOR_GENERIC_RESPONSE_PATH` | $.choices[0].message.content | JSON path for response |
+| `WALACOR_RESPONSE_POLICY_ENABLED` | true | Enable post-inference content analysis |
+| `WALACOR_PII_DETECTION_ENABLED` | true | Enable PII detector |
+| `WALACOR_TOXICITY_DETECTION_ENABLED` | false | Enable toxicity detector |
+| `WALACOR_TOXICITY_DENY_TERMS` | (empty) | Comma-separated extra deny-list terms |
+
+## Token budget (Phase 11)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_TOKEN_BUDGET_ENABLED` | false | Enable token budget enforcement |
+| `WALACOR_TOKEN_BUDGET_PERIOD` | monthly | Budget period: `daily` or `monthly` |
+| `WALACOR_TOKEN_BUDGET_MAX_TOKENS` | 0 | Max tokens per period per tenant (0 = unlimited) |
+
+## Session chain integrity (Phase 13)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_SESSION_CHAIN_ENABLED` | true | Enable Merkle chain for session records (G5) |
+| `WALACOR_SESSION_CHAIN_MAX_SESSIONS` | 10000 | Max concurrent sessions tracked |
+| `WALACOR_SESSION_CHAIN_TTL` | 3600 | Session state TTL seconds |
+
+## Tool-aware gateway (Phase 14/16)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_TOOL_AWARE_ENABLED` | false | Enable tool-call awareness and auditing |
+| `WALACOR_TOOL_STRATEGY` | auto | Tool strategy: `auto`, `passive`, `active`, or `disabled` |
+| `WALACOR_TOOL_MAX_ITERATIONS` | 10 | Max tool-call loop iterations (active strategy) |
+| `WALACOR_TOOL_EXECUTION_TIMEOUT_MS` | 30000 | Per-tool execution timeout in ms |
+| `WALACOR_TOOL_CONTENT_ANALYSIS_ENABLED` | true | Run content analyzers on tool inputs/outputs |
+| `WALACOR_MCP_SERVERS_JSON` | (empty) | JSON array or file path for MCP server configs |
+| `WALACOR_WEB_SEARCH_ENABLED` | false | Enable built-in web search tool |
+| `WALACOR_WEB_SEARCH_PROVIDER` | duckduckgo | `duckduckgo`, `brave`, or `serpapi` |
+| `WALACOR_WEB_SEARCH_API_KEY` | (empty) | Required for `brave` and `serpapi` |
+| `WALACOR_WEB_SEARCH_MAX_RESULTS` | 5 | Results per query |
+
+## Multi-model routing + Redis (Phase 15)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_REDIS_URL` | (empty) | Redis URL for shared state (e.g. `redis://redis-svc:6379/0`) |
+| `WALACOR_MODEL_ROUTING_JSON` | (empty) | JSON array or file path for model routing rules |
+
+## Reasoning model support (Phase 17)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_THINKING_STRIP_ENABLED` | true | Strip `<think>` blocks from reasoning model responses |
+
+## Llama Guard safety classifier (Phase 17)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_LLAMA_GUARD_ENABLED` | false | Enable Llama Guard 3 content analyzer |
+| `WALACOR_LLAMA_GUARD_MODEL` | llama-guard3 | Ollama model name for Llama Guard inference |
+| `WALACOR_LLAMA_GUARD_OLLAMA_URL` | (empty) | Ollama URL for Llama Guard (defaults to PROVIDER_OLLAMA_URL) |
+| `WALACOR_LLAMA_GUARD_TIMEOUT_MS` | 5000 | Inference timeout in ms |
+
+## OpenTelemetry export (Phase 17)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_OTEL_ENABLED` | false | Enable OpenTelemetry span export |
+| `WALACOR_OTEL_ENDPOINT` | http://localhost:4317 | OTLP gRPC endpoint |
+| `WALACOR_OTEL_SERVICE_NAME` | walacor-gateway | OTel service.name resource attribute |
+
+## Lineage dashboard (Phase 18)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_LINEAGE_ENABLED` | true | Enable `/lineage/` dashboard and `/v1/lineage/*` API |
+
+## Embedded control plane (Phase 20)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_CONTROL_PLANE_ENABLED` | true | Enable embedded control plane (CRUD + dashboard tab) |
+| `WALACOR_CONTROL_PLANE_DB_PATH` | (empty) | SQLite path for control plane state (default: alongside WAL db) |
 
 ## Observability
 
@@ -68,6 +164,10 @@ When `WALACOR_SKIP_GOVERNANCE=true`, both can be omitted (transparent proxy only
 | `WALACOR_METRICS_ENABLED` | true | Enable `/metrics` endpoint |
 | `WALACOR_LOG_LEVEL` | INFO | Logging level |
 
-## .env files
+## Server
 
-The gateway loads `.env` or `.env.gateway` from the current working directory if present. Values in the environment override file values.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WALACOR_GATEWAY_HOST` | 0.0.0.0 | Bind host |
+| `WALACOR_GATEWAY_PORT` | 8000 | Bind port |
+| `WALACOR_UVICORN_WORKERS` | 1 | Worker processes (>1 disables in-memory state sharing) |

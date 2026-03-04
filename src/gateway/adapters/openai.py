@@ -11,6 +11,7 @@ Phase 14 additions:
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import httpx
@@ -280,8 +281,7 @@ class OpenAIAdapter(ProviderAdapter):
         metadata: dict[str, Any] = {}
         if request.headers.get("x-user-id"):
             metadata["user"] = request.headers["x-user-id"]
-        if request.headers.get("x-session-id"):
-            metadata["session_id"] = request.headers["x-session-id"]
+        metadata["session_id"] = request.headers.get("x-session-id") or str(uuid.uuid4())
         params = _extract_inference_params(data)
         if params:
             metadata["inference_params"] = params

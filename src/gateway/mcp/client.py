@@ -45,6 +45,7 @@ class ToolResult:
     content: str | dict | list
     is_error: bool = False
     duration_ms: float = 0.0
+    sources: list[dict] | None = None  # cited URLs (e.g. web_search results)
 
 
 class MCPClient:

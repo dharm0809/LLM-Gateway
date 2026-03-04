@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Walacor Gateway — Audit Lineage</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/lineage/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha3/0.9.3/sha3.min.js"></script>
+</head>
+<body>
+    <header id="status-bar">
+        <div class="status-brand">
+            <span class="brand-diamond">&#9670;</span>
+            <span class="brand-text">WALACOR</span>
+            <span class="brand-sub">LINEAGE</span>
+        </div>
+        <div class="status-right">
+            <div class="status-pill" id="status-pill">
+                <span class="status-dot" id="status-dot"></span>
+                <span id="status-label">connecting</span>
+            </div>
+            <div class="status-meta" id="status-meta"></div>
+        </div>
+    </header>
+    <nav id="nav">
+        <div class="nav-inner">
+            <a href="#" data-view="overview" class="tab active">Overview</a>
+            <a href="#" data-view="sessions" class="tab">Sessions</a>
+            <a href="#" data-view="attempts" class="tab">Attempts</a>
+            <a href="#" data-view="control" class="tab">Control</a>
+        </div>
+    </nav>
+    <main id="app">
+        <div id="content"></div>
+    </main>
+    <script src="/lineage/app.js"></script>
+</body>
+</html>

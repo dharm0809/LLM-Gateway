@@ -13,12 +13,39 @@ from starlette.routing import Route
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from starlette.routing import Mount
+from starlette.staticfiles import StaticFiles
+
 from gateway.config import get_settings
 from gateway.pipeline.orchestrator import handle_request
 from gateway.pipeline.context import get_pipeline_context
 from gateway.health import health_response, metrics_response
 from gateway.auth.api_key import require_api_key_if_configured
 from gateway.middleware.completeness import completeness_middleware
+from gateway.lineage.api import (
+    lineage_sessions,
+    lineage_session_timeline,
+    lineage_execution,
+    lineage_attempts,
+    lineage_verify,
+)
+from gateway.control.api import (
+    control_list_attestations,
+    control_upsert_attestation,
+    control_delete_attestation,
+    control_list_policies,
+    control_create_policy,
+    control_update_policy,
+    control_delete_policy,
+    control_list_budgets,
+    control_upsert_budget,
+    control_delete_budget,
+    control_status,
+)
+from gateway.control.sync_api import (
+    sync_attestation_proofs,
+    sync_policies,
+)
 
 from gateway.util.json_logger import configure_json_logging
 configure_json_logging(os.environ.get("WALACOR_LOG_LEVEL", "INFO"))
@@ -27,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 async def api_key_middleware(request: Request, call_next):
     """When WALACOR_GATEWAY_API_KEYS is set, require valid API key on proxy routes."""
-    if request.url.path in ("/health", "/metrics"):
+    if request.url.path in ("/health", "/metrics") or request.url.path.startswith(("/lineage", "/v1/lineage")):
         return await call_next(request)
     settings = get_settings()
     err = require_api_key_if_configured(request, settings.api_keys_list)
@@ -74,8 +101,8 @@ async def _self_test() -> None:
     if len(h) != 128:
         raise RuntimeError(f"Hash self-test failed: expected length 128, got {len(h)}")
 
-    # Control plane URL validation (governance mode only).
-    if not settings.skip_governance and not settings.walacor_storage_enabled:
+    # Control plane URL validation (governance mode only, skip when embedded CP handles it).
+    if not settings.skip_governance and not settings.walacor_storage_enabled and settings.control_plane_url:
         parsed = urlparse(settings.control_plane_url)
         if parsed.scheme not in ("http", "https"):
             raise RuntimeError(f"Control plane URL invalid scheme: {parsed.scheme}")
@@ -98,13 +125,31 @@ async def _self_test() -> None:
 
 
 async def _init_governance(settings, ctx) -> None:
-    """Phase 1-4: caches, sync client, startup sync."""
+    """Phase 1-4: caches, sync client, startup sync.
+
+    When no control_plane_url is configured, governance features (session chain,
+    budget, content analysis) still work — models are auto-attested on first use
+    and an empty (pass-all) policy set is seeded.
+    """
     from gateway.cache.attestation_cache import AttestationCache
     from gateway.cache.policy_cache import PolicyCache
-    from gateway.sync.sync_client import SyncClient
 
     ctx.attestation_cache = AttestationCache(ttl_seconds=settings.attestation_cache_ttl)
     ctx.policy_cache = PolicyCache(staleness_threshold_seconds=settings.policy_staleness_threshold)
+
+    if not settings.control_plane_url:
+        # No control plane — seed empty policy set (prevents staleness fail-close)
+        # and leave sync_client as None (models will be auto-attested on first use).
+        v = ctx.policy_cache.next_version()
+        ctx.policy_cache.set_policies(v, [])
+        logger.info(
+            "Governance mode: no control plane configured — auto-attest enabled, "
+            "policies pass-all (connect a control plane to enforce attestation and policy rules)"
+        )
+        return
+
+    from gateway.sync.sync_client import SyncClient
+
     control_plane_key = (settings.control_plane_api_key or "").strip() or None
     ctx.sync_client = SyncClient(
         control_plane_url=settings.control_plane_url,
@@ -161,6 +206,27 @@ def _init_content_analyzers(settings, ctx) -> None:
         logger.info("Content analyzer loaded: walacor.toxicity.v1 (extra_terms=%d)", len(extra))
 
 
+def _init_llama_guard(settings, ctx) -> None:
+    """Phase 17: Llama Guard 3 content analyzer (local Ollama, fail-open)."""
+    from gateway.content.llama_guard import LlamaGuardAnalyzer
+
+    ollama_url = settings.llama_guard_ollama_url or settings.provider_ollama_url
+    if not ollama_url:
+        logger.warning("llama_guard_enabled=True but no Ollama URL configured — skipping")
+        return
+    analyzer = LlamaGuardAnalyzer(
+        ollama_url=ollama_url,
+        model=settings.llama_guard_model,
+        timeout_ms=settings.llama_guard_timeout_ms,
+        http_client=ctx.http_client,
+    )
+    ctx.content_analyzers.append(analyzer)
+    logger.info(
+        "Content analyzer loaded: walacor.llama_guard.v3 (model=%s url=%s timeout_ms=%d)",
+        settings.llama_guard_model, ollama_url, settings.llama_guard_timeout_ms,
+    )
+
+
 async def _init_redis(settings) -> "Any | None":
     """Phase 15: Redis client for shared state (multi-replica). Returns None when redis_url is empty."""
     if not settings.redis_url:
@@ -174,7 +240,14 @@ async def _init_redis(settings) -> "Any | None":
         )
     client = aioredis.from_url(settings.redis_url, decode_responses=False)
     await client.ping()  # fail fast at startup if unreachable
-    logger.info("Redis connected: %s", settings.redis_url)
+    # Redact password from URL before logging to avoid credential leakage in logs.
+    from urllib.parse import urlparse, urlunparse
+    _parsed = urlparse(settings.redis_url)
+    _safe_url = (
+        urlunparse(_parsed._replace(netloc=_parsed.netloc.replace(f":{_parsed.password}@", ":***@")))
+        if _parsed.password else settings.redis_url
+    )
+    logger.info("Redis connected: %s", _safe_url)
     return client
 
 
@@ -228,6 +301,69 @@ async def _init_tool_registry(settings, ctx) -> None:
     )
 
 
+async def _init_web_search_tool(settings, ctx) -> None:
+    """Register built-in web search in ToolRegistry for the active tool strategy."""
+    from gateway.tools.web_search import WebSearchTool
+    from gateway.mcp.registry import ToolRegistry
+
+    if ctx.tool_registry is None:
+        ctx.tool_registry = ToolRegistry([])
+
+    tool = WebSearchTool(
+        provider=settings.web_search_provider,
+        api_key=settings.web_search_api_key,
+        max_results=settings.web_search_max_results,
+        http_client=ctx.http_client,
+    )
+    await ctx.tool_registry.register_builtin_client("builtin_web_search", tool)
+    logger.info(
+        "Built-in web search registered: provider=%s max_results=%d",
+        settings.web_search_provider, settings.web_search_max_results,
+    )
+
+
+def _init_lineage(settings, ctx) -> None:
+    """Phase 18: Lineage dashboard reader (read-only SQLite connection to WAL db)."""
+    if not settings.lineage_enabled:
+        return
+    from gateway.lineage.reader import LineageReader
+
+    wal_db = Path(settings.wal_path) / "wal.db"
+    # Force WALWriter to create the DB file if it hasn't yet (lazy init).
+    if not wal_db.exists() and ctx.wal_writer:
+        ctx.wal_writer._ensure_conn()
+    if not wal_db.exists():
+        logger.info("Lineage dashboard: WAL db not found at %s — skipping", wal_db)
+        return
+    ctx.lineage_reader = LineageReader(str(wal_db))
+    logger.info("Lineage dashboard enabled: reading from %s", wal_db)
+
+
+def _init_otel(settings, ctx) -> None:
+    """Phase 17: OpenTelemetry tracer (optional; fail-open if SDK not installed)."""
+    from gateway.telemetry.otel import init_tracer
+
+    ctx.tracer = init_tracer(
+        service_name=settings.otel_service_name,
+        endpoint=settings.otel_endpoint,
+    )
+
+
+def _init_control_plane(settings, ctx) -> None:
+    """Phase 20: Embedded control plane — SQLite-backed CRUD + local sync."""
+    from gateway.control.store import ControlPlaneStore
+    from gateway.control.loader import load_into_caches
+
+    db_path = settings.control_plane_db_path
+    if not db_path:
+        db_path = str(Path(settings.wal_path) / "control.db")
+    ctx.control_store = ControlPlaneStore(db_path)
+    # Force table creation
+    ctx.control_store._ensure_conn()
+    load_into_caches(ctx.control_store, ctx, settings)
+    logger.info("Embedded control plane ready: %s", db_path)
+
+
 def _next_backoff(current: float, cap: float) -> float:
     """Exponential backoff: 5 s initial, doubles each step, capped at cap."""
     step = current * 2 + 5.0 if current else 5.0
@@ -274,23 +410,42 @@ async def on_startup() -> None:
         http2=True,
     )
 
+    # Always init WAL when lineage is enabled (lineage reads from local WAL).
+    if settings.lineage_enabled and not ctx.wal_writer:
+        _init_wal(settings, ctx)
+
     if settings.skip_governance:
         ctx.skip_governance = True
+        _init_lineage(settings, ctx)
         logger.info("Gateway running in skip_governance (transparent proxy) mode")
         return
 
     await _init_governance(settings, ctx)
-    if not settings.walacor_storage_enabled:
+    if not settings.walacor_storage_enabled and not ctx.wal_writer:
         _init_wal(settings, ctx)
+    _init_lineage(settings, ctx)
     ctx.redis_client = await _init_redis(settings)
     _init_content_analyzers(settings, ctx)
+    if settings.llama_guard_enabled:
+        _init_llama_guard(settings, ctx)
     _init_budget_tracker(settings, ctx)
     _init_session_chain(settings, ctx)
     if settings.tool_aware_enabled and settings.mcp_servers_json:
         await _init_tool_registry(settings, ctx)
+    if settings.tool_aware_enabled and settings.web_search_enabled:
+        await _init_web_search_tool(settings, ctx)
+    if settings.otel_enabled:
+        _init_otel(settings, ctx)
+    if settings.control_plane_enabled:
+        _init_control_plane(settings, ctx)
     await _self_test()
-    ctx.sync_loop_task = asyncio.create_task(_run_sync_loop(settings, ctx))
-    logger.info("Gateway startup complete: attestation and policy caches synced, WAL and delivery worker started")
+    if ctx.sync_client:
+        ctx.sync_loop_task = asyncio.create_task(_run_sync_loop(settings, ctx))
+    elif settings.control_plane_enabled:
+        # Local sync loop keeps policy_cache.fetched_at fresh (fixes fail_closed)
+        from gateway.control.loader import _run_local_sync_loop
+        ctx.local_sync_task = asyncio.create_task(_run_local_sync_loop(settings, ctx))
+    logger.info("Gateway startup complete: governance pipeline ready, WAL and delivery worker started")
 
 
 async def on_shutdown() -> None:
@@ -318,6 +473,8 @@ async def on_shutdown() -> None:
         try:
             ctx.delivery_worker.stop()
         except Exception as e:
+            # Data-loss risk: WAL records in flight may not be flushed.
+            logger.error("Gateway shutdown: delivery_worker.stop failed — WAL records may not be flushed", exc_info=True)
             errors.append(f"delivery_worker.stop: {e}")
 
     if ctx.sync_client:
@@ -330,6 +487,8 @@ async def on_shutdown() -> None:
         try:
             ctx.wal_writer.close()
         except Exception as e:
+            # Data-loss risk: SQLite WAL file may be left in a partially-written state.
+            logger.error("Gateway shutdown: wal_writer.close failed — WAL file may be corrupt", exc_info=True)
             errors.append(f"wal_writer.close: {e}")
 
     if ctx.walacor_client:
@@ -353,6 +512,29 @@ async def on_shutdown() -> None:
             errors.append(f"redis_client.aclose: {e}")
         ctx.redis_client = None
 
+    if ctx.lineage_reader:
+        try:
+            ctx.lineage_reader.close()
+        except Exception as e:
+            errors.append(f"lineage_reader.close: {e}")
+        ctx.lineage_reader = None
+
+    if ctx.local_sync_task and not ctx.local_sync_task.done():
+        ctx.local_sync_task.cancel()
+        try:
+            await ctx.local_sync_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            errors.append(f"local_sync_task: {e}")
+
+    if ctx.control_store:
+        try:
+            ctx.control_store.close()
+        except Exception as e:
+            errors.append(f"control_store.close: {e}")
+        ctx.control_store = None
+
     if errors:
         logger.warning("Gateway shutdown completed with errors: %s", "; ".join(errors))
     else:
@@ -360,9 +542,32 @@ async def on_shutdown() -> None:
 
 
 def create_app() -> Starlette:
-    routes = [
+    _static_dir = Path(__file__).parent / "lineage" / "static"
+    routes: list = [
         Route("/health", health_response, methods=["GET"]),
         Route("/metrics", metrics_response, methods=["GET"]),
+        # Lineage API
+        Route("/v1/lineage/sessions", lineage_sessions, methods=["GET"]),
+        Route("/v1/lineage/sessions/{session_id:path}", lineage_session_timeline, methods=["GET"]),
+        Route("/v1/lineage/executions/{execution_id:path}", lineage_execution, methods=["GET"]),
+        Route("/v1/lineage/attempts", lineage_attempts, methods=["GET"]),
+        Route("/v1/lineage/verify/{session_id:path}", lineage_verify, methods=["GET"]),
+        # Control plane CRUD
+        Route("/v1/control/attestations", control_list_attestations, methods=["GET"]),
+        Route("/v1/control/attestations", control_upsert_attestation, methods=["POST"]),
+        Route("/v1/control/attestations/{id:path}", control_delete_attestation, methods=["DELETE"]),
+        Route("/v1/control/policies", control_list_policies, methods=["GET"]),
+        Route("/v1/control/policies", control_create_policy, methods=["POST"]),
+        Route("/v1/control/policies/{id:path}", control_update_policy, methods=["PUT"]),
+        Route("/v1/control/policies/{id:path}", control_delete_policy, methods=["DELETE"]),
+        Route("/v1/control/budgets", control_list_budgets, methods=["GET"]),
+        Route("/v1/control/budgets", control_upsert_budget, methods=["POST"]),
+        Route("/v1/control/budgets/{id:path}", control_delete_budget, methods=["DELETE"]),
+        Route("/v1/control/status", control_status, methods=["GET"]),
+        # Sync-contract endpoints (for fleet sync)
+        Route("/v1/attestation-proofs", sync_attestation_proofs, methods=["GET"]),
+        Route("/v1/policies", sync_policies, methods=["GET"]),
+        # Proxy routes
         Route("/v1/chat/completions", catch_all_post, methods=["POST"]),
         Route("/v1/chat/completions/", catch_all_post, methods=["POST"]),
         Route("/v1/completions", catch_all_post, methods=["POST"]),
@@ -373,6 +578,9 @@ def create_app() -> Starlette:
         Route("/v1/custom/", catch_all_post, methods=["POST"]),
         Route("/generate", catch_all_post, methods=["POST"]),
     ]
+    # Lineage dashboard static files (only if directory exists in package)
+    if _static_dir.is_dir():
+        routes.append(Mount("/lineage", app=StaticFiles(directory=str(_static_dir), html=True)))
     app = Starlette(debug=False, routes=routes)
     # Middleware order: last registered = outermost (first to run).
     # CORS first so OPTIONS preflight succeeds for browser clients.

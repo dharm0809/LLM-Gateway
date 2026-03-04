@@ -23,11 +23,15 @@ def build_execution_record(
     user: str | None = None,
     session_id: str | None = None,
     metadata: dict | None = None,
+    model_id: str | None = None,
+    provider: str | None = None,
 ) -> dict:
     """Build execution record as dict (no prompt_hash/response_hash — backend hashes from content)."""
     return {
         "execution_id": str(uuid.uuid4()),
         "model_attestation_id": attestation_id,
+        "model_id": model_id or call.model_id,
+        "provider": provider,
         "policy_version": policy_version,
         "policy_result": policy_result,
         "tenant_id": tenant_id,
@@ -40,4 +44,5 @@ def build_execution_record(
         "response_content": model_response.content or None,
         "provider_request_id": model_response.provider_request_id,
         "model_hash": model_response.model_hash,
+        "thinking_content": model_response.thinking_content or None,
     }

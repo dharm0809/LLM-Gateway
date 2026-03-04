@@ -1,7 +1,5 @@
 # Walacor AI Security Gateway
 
-claude --resume 13dfffec-3d46-4c2b-8c2a-3c3caadb0946 
-
 **The governance enforcement and cryptographic audit layer for enterprise AI infrastructure.**
 
 A production-grade, drop-in ASGI proxy that integrates with any LLM provider without changing application code. The gateway enforces five security guarantees on every inference request — model attestation, full-fidelity audit recording, pre-inference policy, post-inference content analysis, and session chain integrity — while feeding a cryptographic audit trail to the Walacor control plane. Providers stay providers; the governance layer is Walacor's.
@@ -45,7 +43,7 @@ Client
 │  │  │  5.     Token usage recording            │ │ │
 │  │  │  6. G2  Build execution record            │ │ │
 │  │  │  7. G5  Session Merkle chain             │ │ │
-│  │  │  8. G2  Audit write (Walacor or WAL)      │ │ │
+│  │  │  8. G2  Audit write (Walacor + WAL)       │ │ │
 │  │  └──────────────────────────────────────────┘ │ │
 │  └────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────┘
@@ -56,7 +54,7 @@ Provider (OpenAI / Anthropic / HuggingFace / Ollama / Generic)
 
 Streaming responses use a tee-buffer: chunks are forwarded to the caller in real time while being accumulated for post-stream audit recording via a Starlette `BackgroundTask`.
 
-When `WALACOR_SERVER`, `WALACOR_USERNAME`, and `WALACOR_PASSWORD` are all set, the gateway writes directly to Walacor's backend — step 8 calls `POST /envelopes/submit` via `WalacorClient` instead of writing to SQLite. The SQLite WAL and delivery worker are not started. When those variables are unset, the gateway falls back to the SQLite WAL + delivery worker path.
+When `WALACOR_SERVER`, `WALACOR_USERNAME`, and `WALACOR_PASSWORD` are all set, the gateway writes to **both** Walacor's backend (`POST /envelopes/submit` via `WalacorClient`) **and** the local SQLite WAL. This dual-write ensures the lineage dashboard always has local data for browsing and chain verification, while Walacor's backend provides durable long-term storage. When Walacor credentials are unset, the gateway uses the SQLite WAL only.
 
 ### Data plane ↔ Control plane boundary
 
@@ -71,8 +69,9 @@ When `WALACOR_SERVER`, `WALACOR_USERNAME`, and `WALACOR_PASSWORD` are all set, t
 │                │                                 │               │
 │                │  direct write (WalacorClient)   │               │
 │                │  POST /envelopes/submit          │               │
-│                │  ── executions (ETId 9000001)   │               │
-│                │  ── attempts   (ETId 9000002)   │               │
+│                │  ── executions  (ETId 9000001)  │               │
+│                │  ── attempts    (ETId 9000002)  │               │
+│                │  ── tool events (ETId 9000003)  │               │
 │                └────────────────────────────────►│               │
 │                                                  │               │
 └──────────────────────────────────────────────────┼───────────────┘
@@ -104,6 +103,8 @@ Every allowed request produces one `ExecutionRecord` written to Walacor's backen
 | `provider_request_id` | ID assigned by the provider (e.g. `chatcmpl-xxx`, `msg_xxx`) — the interaction-level identifier from the model/user exchange |
 | `model_hash` | Hash of the model weights/binary from the MEE (e.g. Ollama digest from `/api/show`). `null` for cloud providers. |
 | `model_attestation_id` | Attestation record ID from the control plane |
+| `model_id` | Actual model name (e.g. `qwen3:4b`, `gpt-4`). Used by the lineage dashboard for display. |
+| `provider` | Provider that served this request (`ollama`, `openai`, `anthropic`, etc.) |
 | `policy_version` | Policy version applied to this request |
 | `policy_result` | `pass`, `blocked`, or `flagged` |
 | `tenant_id` | Tenant this request belongs to |
@@ -159,7 +160,9 @@ export WALACOR_GATEWAY_PROVIDER=ollama
 export WALACOR_PROVIDER_OLLAMA_URL=http://localhost:11434
 walacor-gateway
 ```
-The `OllamaAdapter` calls `POST /api/show` to retrieve the model's SHA256 digest from the Ollama registry and stores it as `model_hash` in the execution record. Digests are cached per model name for the lifetime of the process.
+The `OllamaAdapter` calls `POST /api/show` to retrieve the model's SHA256 digest from the Ollama registry and stores it as `model_hash` in the execution record. Digests are cached per model name with a configurable TTL (default 1800s, set via `WALACOR_OLLAMA_DIGEST_CACHE_TTL`).
+
+For reasoning models (e.g., Qwen3), the adapter reads Ollama's native `reasoning` field from both non-streaming responses (`message.reasoning`) and streaming deltas (`delta.reasoning`). This content is stored as `thinking_content` in the execution record, separate from the visible response. For older Ollama versions that embed `<think>…</think>` tags in the content, the adapter falls back to tag stripping.
 
 **LM Studio (and other OpenAI-compat servers):**
 ```bash
@@ -192,20 +195,32 @@ export WALACOR_GATEWAY_TENANT_ID=your-tenant
 export WALACOR_PROVIDER_OPENAI_KEY=sk-...
 walacor-gateway
 
-# Full governance mode + Walacor storage — OpenAI
+# Full governance mode — Ollama (no control plane needed, auto-attestation)
+export WALACOR_SKIP_GOVERNANCE=false
+export WALACOR_ENFORCEMENT_MODE=enforced
 export WALACOR_GATEWAY_TENANT_ID=tenant-abc
-export WALACOR_CONTROL_PLANE_URL=https://control.example.com
+export WALACOR_GATEWAY_API_KEYS=my-secret-key
+export WALACOR_GATEWAY_PROVIDER=ollama
+export WALACOR_PROVIDER_OLLAMA_URL=http://localhost:11434
+export WALACOR_WAL_PATH=/tmp/walacor-wal
+walacor-gateway
+
+# Full governance mode + Walacor storage — OpenAI
+export WALACOR_SKIP_GOVERNANCE=false
+export WALACOR_GATEWAY_TENANT_ID=tenant-abc
 export WALACOR_SERVER=https://your-walacor-server/api
 export WALACOR_USERNAME=your-username
 export WALACOR_PASSWORD=your-password
 export WALACOR_PROVIDER_OPENAI_KEY=sk-...
 walacor-gateway
 
-# Full governance mode — Ollama (local MEE, fallback WAL storage)
+# Full governance mode + control plane (when available)
 export WALACOR_GATEWAY_TENANT_ID=tenant-abc
 export WALACOR_CONTROL_PLANE_URL=https://control.example.com
-export WALACOR_GATEWAY_PROVIDER=ollama
-export WALACOR_PROVIDER_OLLAMA_URL=http://localhost:11434
+export WALACOR_SERVER=https://your-walacor-server/api
+export WALACOR_USERNAME=your-username
+export WALACOR_PASSWORD=your-password
+export WALACOR_PROVIDER_OPENAI_KEY=sk-...
 walacor-gateway
 ```
 
@@ -234,7 +249,7 @@ Set all three to activate direct writes to Walacor. When any one is missing the 
 | Variable | Default | Description |
 |---|---|---|
 | `WALACOR_GATEWAY_TENANT_ID` | *(required)* | Tenant identifier |
-| `WALACOR_CONTROL_PLANE_URL` | *(required unless skip_governance=true)* | Control plane base URL |
+| `WALACOR_CONTROL_PLANE_URL` | `""` | Control plane base URL. When empty, governance runs with auto-attestation and pass-all policies (no sync). |
 | `WALACOR_GATEWAY_API_KEYS` | `""` | Comma-separated API keys for caller auth. Empty = no auth required. |
 | `WALACOR_CONTROL_PLANE_API_KEY` | `""` | Key the gateway sends when calling the control plane |
 | `WALACOR_GATEWAY_ID` | `gw-<random>` | Stable instance identifier |
@@ -323,6 +338,75 @@ pip install "walacor-gateway[redis]"
 | `WALACOR_GENERIC_PROMPT_PATH` | `$.messages[*].content` | JSONPath to prompt in request |
 | `WALACOR_GENERIC_RESPONSE_PATH` | `$.choices[0].message.content` | JSONPath to content in response |
 
+### Llama Guard (G4 — model-based content safety)
+
+| Variable | Default | Description |
+|---|---|---|
+| `WALACOR_LLAMA_GUARD_ENABLED` | `false` | Enable Llama Guard 3 content analyzer (`walacor.llama_guard.v3`) |
+| `WALACOR_LLAMA_GUARD_MODEL` | `llama-guard3` | Ollama model name for Llama Guard |
+| `WALACOR_LLAMA_GUARD_TIMEOUT_MS` | `10000` | Per-analysis timeout (milliseconds) |
+
+Requires Ollama running locally with the `llama-guard3` model pulled (`ollama pull llama-guard3:1b`). Runs alongside the regex-based PII and toxicity analyzers — all three execute concurrently under enforced timeouts.
+
+### Thinking content strip
+
+| Variable | Default | Description |
+|---|---|---|
+| `WALACOR_THINKING_STRIP_ENABLED` | `true` | Strip `<think>…</think>` tokens from model responses before returning to caller. Stripped content is preserved as `thinking_content` in the execution record. |
+
+For Ollama models that natively separate reasoning (e.g., Qwen3), the adapter reads the native `reasoning` field directly instead of parsing `<think>` tags. Both paths produce the same `thinking_content` field in the audit record.
+
+### Tool-aware mode and built-in web search
+
+| Variable | Default | Description |
+|---|---|---|
+| `WALACOR_TOOL_AWARE_ENABLED` | `false` | Enable MCP/tool interception in the pipeline |
+| `WALACOR_MCP_SERVERS_JSON` | `""` | JSON array of MCP server definitions, or a file path |
+| `WALACOR_WEB_SEARCH_ENABLED` | `false` | Register built-in web search tool (requires `tool_aware_enabled=true`) |
+| `WALACOR_WEB_SEARCH_PROVIDER` | `duckduckgo` | Web search backend: `duckduckgo`, `brave`, or `serpapi` |
+| `WALACOR_WEB_SEARCH_API_KEY` | `""` | API key for Brave or SerpAPI (not needed for DuckDuckGo) |
+| `WALACOR_WEB_SEARCH_MAX_RESULTS` | `5` | Max results per search |
+
+When tool-aware mode is active and the model supports tool calling, the gateway auto-detects whether to use the **passive** strategy (cloud providers report tool calls in their response) or the **active** strategy (gateway runs the tool loop itself for local models like Ollama). Active strategy forces streaming requests to non-streaming internally to intercept tool calls. The tool loop returns the model's final answer (after all tool executions) to the caller — intermediate `finish_reason: tool_calls` responses are consumed internally.
+
+**Model capability auto-discovery:** Not all models support function calling. When the gateway sends tool definitions to a model and receives a 400/422 "does not support tools" error, it automatically strips the tool definitions and retries — the caller never sees the failure. The result is cached in a **model capability registry** so subsequent requests to the same model skip tool injection entirely. This means:
+
+- Models that support tools (e.g., Qwen3, GPT-4) get the full tool loop
+- Models that don't (e.g., Gemma3, Phi3) work normally without tools — no wasted retries after the first request
+- Real SSE streaming is preserved for tool-unsupported models (no stream→non-stream override needed)
+- The registry is visible in the `/health` endpoint under `model_capabilities`
+
+The gateway handles concurrent requests to multiple models safely — session chains stay contiguous, budget tracking is consistent, and there are no race conditions even when different models share a session.
+
+**Tool event auditing:** Every tool call produces a separate tool event record in both Walacor backend (ETId 9000003) and the local WAL. Each record contains the tool name, input data (actual function arguments), input/output SHA3-512 hashes, sources (URLs with titles for web search), content analysis results on tool output, duration, and iteration number. Content analyzers (PII, toxicity, Llama Guard) run on every tool output to detect indirect prompt injection via tool results.
+
+### Lineage dashboard
+
+| Variable | Default | Description |
+|---|---|---|
+| `WALACOR_LINEAGE_ENABLED` | `true` | Enable the lineage dashboard at `/lineage/` and API at `/v1/lineage/*` |
+
+The lineage dashboard provides a read-only view into the local WAL database — session explorer, execution timeline, chain verification, and attempt completeness. See [Lineage dashboard](#lineage-dashboard) for details.
+
+### Embedded control plane
+
+| Variable | Default | Description |
+|---|---|---|
+| `WALACOR_CONTROL_PLANE_ENABLED` | `true` | Enable the embedded SQLite control plane for local attestation, policy, and budget management |
+| `WALACOR_CONTROL_PLANE_DB_PATH` | `""` | SQLite database path. When empty, defaults to `{wal_path}/control.db` |
+
+When enabled, the gateway embeds a CRUD control plane backed by SQLite. This provides local management of model attestations, policies, and token budgets via REST API and the dashboard's **Control** tab — no external control plane service required. Mutations immediately refresh in-memory caches (attestation, policy, budget). A local sync loop refreshes caches every `sync_interval` seconds, preventing the `fail_closed` state that occurs when policy caches go stale. See [Embedded control plane](#embedded-control-plane) for details.
+
+### OpenTelemetry (OTel)
+
+| Variable | Default | Description |
+|---|---|---|
+| `WALACOR_OTEL_ENABLED` | `false` | Enable OpenTelemetry trace export |
+| `WALACOR_OTEL_ENDPOINT` | `http://localhost:4317` | OTLP gRPC collector endpoint |
+| `WALACOR_OTEL_SERVICE_NAME` | `walacor-gateway` | OTel service name |
+
+Requires the `opentelemetry-sdk`, `opentelemetry-exporter-otlp`, and `opentelemetry-instrumentation-httpx` packages.
+
 ### Observability
 
 | Variable | Default | Description |
@@ -343,6 +427,25 @@ pip install "walacor-gateway[redis]"
 | `/generate` | POST | HuggingFace inference proxy |
 | `/health` | GET | JSON health status |
 | `/metrics` | GET | Prometheus text format metrics |
+| `/lineage/` | GET | Lineage dashboard (HTML SPA) |
+| `/v1/lineage/sessions` | GET | List sessions with record counts |
+| `/v1/lineage/sessions/{session_id}` | GET | Session execution timeline |
+| `/v1/lineage/executions/{execution_id}` | GET | Full execution record + tool events |
+| `/v1/lineage/attempts` | GET | Recent attempts with disposition stats |
+| `/v1/lineage/verify/{session_id}` | GET | Server-side chain verification |
+| `/v1/control/attestations` | GET | List model attestations |
+| `/v1/control/attestations` | POST | Create/update attestation |
+| `/v1/control/attestations/{id}` | DELETE | Remove attestation |
+| `/v1/control/policies` | GET | List policies |
+| `/v1/control/policies` | POST | Create policy |
+| `/v1/control/policies/{id}` | PUT | Update policy |
+| `/v1/control/policies/{id}` | DELETE | Remove policy |
+| `/v1/control/budgets` | GET | List budgets |
+| `/v1/control/budgets` | POST | Create/update budget |
+| `/v1/control/budgets/{id}` | DELETE | Remove budget |
+| `/v1/control/status` | GET | Comprehensive gateway control status |
+| `/v1/attestation-proofs` | GET | Attestation proofs (SyncClient format) |
+| `/v1/policies` | GET | Active policies (SyncClient format) |
 
 ### `/health` response
 
@@ -370,7 +473,11 @@ pip install "walacor-gateway[redis]"
     "max_tokens": 1000000,
     "percent_used": 14.2
   },
-  "session_chain": { "active_sessions": 3 }
+  "session_chain": { "active_sessions": 3 },
+  "model_capabilities": {
+    "gpt-4": { "supports_tools": true },
+    "llama3.2": { "supports_tools": false }
+  }
 }
 ```
 
@@ -414,7 +521,7 @@ Set `WALACOR_ENFORCEMENT_MODE=audit_only` to run in shadow mode:
 
 **This is the extensibility point.** The `ContentAnalyzer` plugin interface is how the gateway addresses the "semantic blindness" gap in traditional proxy-based AI security tools — proxies that hash and record traffic without understanding what the model actually said. Every analyzer runs concurrently under an enforced per-analyzer timeout, returns a typed `Decision` (verdict, confidence, category, reason), and never stores or logs the text it analyzed.
 
-The gateway ships two built-in analyzers. Any number of custom analyzers can be added without touching the pipeline.
+The gateway ships three built-in analyzers. Any number of custom analyzers can be added without touching the pipeline.
 
 ### Built-in: `walacor.pii.v1`
 
@@ -444,6 +551,19 @@ Deny-list pattern matching. Default categories:
 | `custom_deny_list` | WARN |
 
 Extra terms added at startup via `WALACOR_TOXICITY_DENY_TERMS=term1,term2`.
+
+### Built-in: `walacor.llama_guard.v3`
+
+Model-based content safety using Meta's Llama Guard 3. Runs the response through a local Llama Guard model (via Ollama) to detect unsafe content categories including violence, sexual content, criminal planning, and more. Requires `WALACOR_LLAMA_GUARD_ENABLED=true` and the Llama Guard model pulled in Ollama.
+
+| Configuration | Value |
+|---|---|
+| Backend | Ollama (local inference) |
+| Default model | `llama-guard3` (1B parameter variant) |
+| Timeout | 10 seconds (configurable) |
+| Verdict | `BLOCK` on `unsafe`, `PASS` on `safe` |
+
+Llama Guard runs concurrently with PII and toxicity analyzers — all three execute in parallel under enforced timeouts. No response content is stored by the analyzer.
 
 ### Writing a custom analyzer
 
@@ -589,6 +709,7 @@ When `WALACOR_SERVER`, `WALACOR_USERNAME`, and `WALACOR_PASSWORD` are all config
 
 - **`walacor_gw_executions`** (ETId=9000001) — full execution records: prompt text, response content, provider request ID, model hash, session chain fields
 - **`walacor_gw_attempts`** (ETId=9000002) — one row per request (completeness invariant), all dispositions
+- **`walacor_gw_tool_events`** (ETId=9000003) — one row per tool call: tool name, input data, input/output hashes, sources, content analysis, duration
 
 `WalacorClient` authenticates with username/password (`POST /auth/login`), receives a JWT Bearer token, and includes it in every `POST /envelopes/submit` call. Token management features:
 
@@ -600,8 +721,10 @@ When `WALACOR_SERVER`, `WALACOR_USERNAME`, and `WALACOR_PASSWORD` are all config
 
 When Walacor credentials are not set, the gateway uses SQLite in WAL mode (`synchronous=FULL`) as a crash-safe append-only log:
 
-- **`wal_records`** — execution records; delivered to the control plane by the background delivery worker
+- **`wal_records`** — execution records and tool event records; delivered to the control plane by the background delivery worker
 - **`gateway_attempts`** — one row per request for all dispositions (local telemetry only)
+
+Tool event records are stored in `wal_records` with `event_type='tool_call'` and linked to their parent execution via the `execution_id` field in the record JSON.
 
 A background delivery worker retries undelivered records with exponential backoff (1 s initial, 60 s cap). The gateway is **fail-closed** when:
 
@@ -609,9 +732,139 @@ A background delivery worker retries undelivered records with exponential backof
 - WAL pending count ≥ `WALACOR_WAL_HIGH_WATER_MARK`
 - WAL disk usage ≥ `WALACOR_WAL_MAX_SIZE_GB`
 
+### Dual-write mode (Walacor + WAL)
+
+When both Walacor credentials and a WAL path are configured, step 8 writes to **both** backends. The Walacor backend provides durable long-term storage and the control plane integration path. The local WAL provides the data source for the lineage dashboard and serves as a fallback if the Walacor write fails. If the Walacor write fails, the WAL write still succeeds and the execution ID is set — no audit record is lost. Tool events follow the same dual-write pattern — each tool call is written to both Walacor (ETId 9000003) and the local WAL.
+
 ### Completeness invariant implementation note
 
 `gateway_attempts` is written by `completeness_middleware`, which wraps every request as the outermost layer. Because Starlette's `BaseHTTPMiddleware` runs `call_next` in a separate anyio task, Python `ContextVar` mutations made inside the handler are not visible in the middleware's `finally` block. Disposition, provider, model ID, and execution ID are therefore propagated via `request.state` (which crosses task boundaries) in addition to `ContextVar` — the middleware reads `request.state` first with a `ContextVar` fallback. This invariant holds in both Walacor backend mode and SQLite WAL mode.
+
+---
+
+## Lineage dashboard
+
+The gateway includes a built-in audit lineage dashboard served at `/lineage/`. It provides a read-only view into the local WAL database with no external dependencies (vanilla HTML/CSS/JS, CDN-loaded js-sha3 for client-side chain verification).
+
+### Views
+
+| View | Description |
+|---|---|
+| **Overview** | Stat cards (sessions, requests, enforcement), live throughput chart, recent sessions, and recent activity feed |
+| **Live Throughput Chart** | Real-time canvas-based telemetry graph on the Overview page. Polls `/metrics` every 3 seconds, parses Prometheus counters, and plots requests/sec over a 3-minute window (60 data points). Gold line for total req/s, green fill for allowed, red fill for blocked. Animated pulse dot on latest point. Live counters: req/s, tokens/s, % allowed, total. |
+| **Session Explorer** | Browse all sessions with record counts, model names, and last activity timestamps |
+| **Session Timeline** | Ordered list of executions within a session, showing sequence numbers, model, policy result, chain hashes, visual chain links, and tool call badges for tool-augmented requests |
+| **Execution Detail** | Full execution record including all fields, tool events with input data and sources, thinking content, and highlighted chain fields |
+| **Tool Events** | Rich tool call display: tool name, type and source badges, terminal-style input data, clickable source links, SHA3-512 hashes, content analysis verdicts on tool output, duration, and iteration count |
+| **Chain Verification** | Server-side and client-side SHA3-512 chain recomputation with per-record pass/fail status |
+| **Attempts / Completeness** | Recent attempt records with disposition statistics |
+
+### API endpoints
+
+All `/v1/lineage/*` endpoints return JSON. They bypass API key authentication (same as `/health` and `/metrics`).
+
+| Endpoint | Query params | Returns |
+|---|---|---|
+| `GET /v1/lineage/sessions` | `limit`, `offset` | `[{session_id, record_count, last_activity}]` |
+| `GET /v1/lineage/sessions/{session_id}` | — | `[{execution_id, record_json, sequence_number, ...}]` |
+| `GET /v1/lineage/executions/{execution_id}` | — | `{record, tool_events}` |
+| `GET /v1/lineage/attempts` | `limit`, `offset` | `{items, stats}` |
+| `GET /v1/lineage/verify/{session_id}` | — | `{valid, records, errors}` |
+
+### Chain verification
+
+The dashboard supports both server-side and client-side chain verification. The canonical hash input is:
+
+```
+SHA3-512(execution_id | policy_version | policy_result | previous_record_hash | sequence_number | timestamp)
+```
+
+Client-side verification uses js-sha3 to independently recompute every `record_hash` in the browser and verify `previous_record_hash` linkage — no trust in the server required.
+
+### Configuration
+
+Set `WALACOR_LINEAGE_ENABLED=false` to disable the dashboard and API endpoints. The lineage reader opens a **separate read-only** SQLite connection (`?mode=ro` + `PRAGMA query_only=ON`) to avoid interfering with the WAL writer.
+
+---
+
+## Embedded control plane
+
+The gateway includes a built-in control plane backed by SQLite (`PRAGMA journal_mode=WAL`, `PRAGMA synchronous=FULL`). It manages model attestations, policies, and token budgets locally — no external control plane service required.
+
+### What it solves
+
+| Problem | Solution |
+|---|---|
+| `fail_closed` after 15 minutes | Local sync loop refreshes policy cache every `sync_interval` seconds, keeping `fetched_at` fresh |
+| No way to approve/revoke models | CRUD API + dashboard Control tab for attestation management |
+| No way to manage policies | Policy CRUD with rules builder, enforcement level, active/disabled status |
+| No way to set budgets without restart | Budget CRUD with immediate cache refresh — changes take effect on the next request |
+| No fleet management | One gateway is the "primary"; others pull via SyncClient from its `/v1/attestation-proofs` and `/v1/policies` endpoints |
+
+### API
+
+All `/v1/control/*` endpoints require API key authentication (sent via `X-API-Key` header). The sync-contract endpoints (`/v1/attestation-proofs`, `/v1/policies`) also require API key auth so remote gateways can pull securely.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/control/attestations` | GET | List attestations. Optional `?tenant_id=` filter. |
+| `/v1/control/attestations` | POST | Create or update attestation. Body: `{model_id, provider, status, notes}` |
+| `/v1/control/attestations/{id}` | DELETE | Remove attestation by ID |
+| `/v1/control/policies` | GET | List policies. Optional `?tenant_id=` filter. |
+| `/v1/control/policies` | POST | Create policy. Body: `{policy_name, enforcement_level, description, rules: [{field, operator, value}]}` |
+| `/v1/control/policies/{id}` | PUT | Update policy fields |
+| `/v1/control/policies/{id}` | DELETE | Remove policy |
+| `/v1/control/budgets` | GET | List budgets. Optional `?tenant_id=` filter. |
+| `/v1/control/budgets` | POST | Create or update budget. Body: `{tenant_id, user, period, max_tokens}` |
+| `/v1/control/budgets/{id}` | DELETE | Remove budget |
+| `/v1/control/status` | GET | Comprehensive gateway status (caches, WAL, sync mode, model capabilities) |
+
+**Side effects:** Every mutation (POST/PUT/DELETE) immediately refreshes the corresponding in-memory cache. Attestation changes clear and repopulate `attestation_cache`. Policy changes call `policy_cache.set_policies()` with a new version and fresh `fetched_at`. Budget changes call `budget_tracker.configure()` for each DB budget and `budget_tracker.remove()` for deleted ones.
+
+### Fleet sync
+
+For multi-gateway deployments, designate one gateway as the primary. Other gateways set `WALACOR_CONTROL_PLANE_URL` pointing to the primary's base URL and `WALACOR_CONTROL_PLANE_API_KEY` to a shared key. The existing `SyncClient` pulls attestations and policies from the primary every `sync_interval` seconds.
+
+```
+Gateway A (primary)  ←── manages attestations/policies via Control tab
+    │
+    ├── /v1/attestation-proofs  ──► Gateway B (SyncClient pulls every 60s)
+    └── /v1/policies            ──► Gateway C (SyncClient pulls every 60s)
+```
+
+When `WALACOR_CONTROL_PLANE_URL` points to the gateway itself (localhost + same port), SyncClient creation is skipped and the gateway loads directly from its local DB.
+
+### Dashboard — Control tab
+
+The lineage dashboard at `/lineage/` includes a **Control** tab with four sub-views:
+
+| Sub-view | Description |
+|---|---|
+| **Models** | Table of attested models with status badges, verification levels, and approve/revoke/remove actions. Shows auto-discovered models from `/health`. Inline "Add Model" form. |
+| **Policies** | Table of policies with enforcement level badges, rule counts, and edit/delete actions. Policy editor with rules builder (field/operator/value rows). |
+| **Budgets** | Table of budgets with usage progress bars (green→amber→red gradient). Inline "Add Budget" form. |
+| **Status** | Read-only card grid showing gateway info, cache status, WAL status, model capabilities, and sync mode. |
+
+The Control tab requires API key authentication — entering the key in the auth card stores it in `sessionStorage` for the session.
+
+---
+
+## Auto-attestation (governance without control plane)
+
+The gateway supports full governance mode without a control plane service. When `WALACOR_CONTROL_PLANE_URL` is not set:
+
+| Feature | Behavior |
+|---|---|
+| **Attestation (G1)** | Models are auto-attested on first use. A `CachedAttestation` with `verification_level=self_attested` and `attestation_id=self-attested:{model}` is created and cached. |
+| **Policy (G3)** | An empty pass-all policy set is seeded at startup. All requests pass pre-inference policy. |
+| **Sync loop** | Not started — no background polling. |
+| **Session chain (G5)** | Fully operational (local or Redis). |
+| **Content analysis (G4)** | Fully operational (PII, toxicity, Llama Guard). |
+| **Token budget** | Fully operational. |
+| **Audit (G2)** | Fully operational (WAL and/or Walacor backend). |
+| **Completeness** | Fully operational. |
+
+This mode is designed for deployments where all models are trusted (e.g., on-premise Ollama) and the organization wants governance enforcement (content analysis, budgets, session chains, audit trail) without deploying a separate control plane service. When a control plane becomes available, set `WALACOR_CONTROL_PLANE_URL` to enable centrally managed attestations and policies.
 
 ---
 
@@ -622,13 +875,6 @@ The following capabilities are planned for V2. None of these change the core gua
 ### External Merkle anchoring
 Periodically publish the WAL root hash to an RFC 3161 timestamp authority or a public distributed ledger. This makes the audit chain independently verifiable by auditors and regulators without access to Walacor infrastructure. The on-gateway chain structure (G5) is already designed to support this; the anchor publication step is the remaining piece.
 
-### MCP and agentic workflow support
-The Model Context Protocol (MCP) introduces a new threat surface: tool calls, multi-agent chains, and automated orchestrators generate LLM traffic that bypasses human review entirely. V2 will add:
-- MCP-aware adapter that parses tool call metadata alongside prompt/response content
-- Per-tool attestation — tool endpoints attested alongside model endpoints
-- Agentic session tracking — chain integrity across multi-agent turns, not just single-session turns
-- Configurable policy rules scoped to agent identity (`agent_id` in request metadata)
-
 ### Pre-attestation webhook
 Before forwarding a request, call a configurable webhook that receives the prompt text, model ID, and policy context. The webhook returns allow/deny. Enables integration with external decisioning systems (DLP, CASB, custom classifiers) without building them into the gateway binary.
 
@@ -636,7 +882,7 @@ Before forwarding a request, call a configurable webhook that receives the promp
 Run the gateway inside an AWS Nitro Enclave or Azure Confidential Container, with remote attestation of the gateway process itself. Combined with G1 model attestation, this closes the remaining trust gap: the gateway's integrity is verifiable by the control plane, not just assumed.
 
 ### Per-user token budgets and quota API
-Extend the current per-tenant budget tracker to per-user granularity with a management API for dynamic quota updates (no restart required). Enables product-level metering and per-seat cost governance.
+The embedded control plane now provides a budget CRUD API (`/v1/control/budgets`) with per-user granularity and dynamic updates (no restart required). The remaining piece is a public-facing quota API with rate-limit headers and usage reporting for product-level metering.
 
 ---
 
@@ -653,28 +899,26 @@ pytest
 # Set up credentials (copy template, fill in values — never committed)
 cp .env.gateway.example .env.gateway
 
-# Run locally with hot reload — Walacor backend storage + skip governance
-# (fastest dev loop: no control plane needed, records go straight to Walacor)
-source .env.gateway   # or: set --env-file .env.gateway in uvicorn
+# Run locally with hot reload — audit-only mode (no governance enforcement)
+source .env.gateway
 WALACOR_SKIP_GOVERNANCE=true \
-WALACOR_PROVIDER_OPENAI_KEY=sk-... \
 uvicorn gateway.main:app --reload --port 8000
 
-# Run with full governance + Walacor storage (mock control plane)
-python mock_control_plane.py &   # serves /v1/attestation-proofs, /v1/policies, /v1/gateway/executions
+# Run with full governance — no control plane needed (auto-attestation + pass-all policies)
 source .env.gateway
-WALACOR_CONTROL_PLANE_URL=http://127.0.0.1:9000 \
-WALACOR_GATEWAY_TENANT_ID=dev-tenant \
-WALACOR_PROVIDER_OPENAI_KEY=sk-... \
-uvicorn gateway.main:app --port 8000
-
-# Run against local Ollama (full governance, SQLite WAL fallback — no Walacor creds)
-python mock_control_plane.py &
-WALACOR_CONTROL_PLANE_URL=http://127.0.0.1:9000 \
+WALACOR_SKIP_GOVERNANCE=false \
+WALACOR_ENFORCEMENT_MODE=enforced \
 WALACOR_GATEWAY_TENANT_ID=dev-tenant \
 WALACOR_GATEWAY_PROVIDER=ollama \
 WALACOR_PROVIDER_OLLAMA_URL=http://localhost:11434 \
 WALACOR_WAL_PATH=/tmp/walacor_wal \
+uvicorn gateway.main:app --port 8000
+
+# Run with full governance + control plane (when available)
+source .env.gateway
+WALACOR_CONTROL_PLANE_URL=http://127.0.0.1:9000 \
+WALACOR_GATEWAY_TENANT_ID=dev-tenant \
+WALACOR_PROVIDER_OPENAI_KEY=sk-... \
 uvicorn gateway.main:app --port 8000
 ```
 

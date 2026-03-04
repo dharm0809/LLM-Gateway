@@ -5,7 +5,7 @@ requires = ["setuptools>=61", "setuptools-scm"]
 [project]
 name = "walacor-gateway"
 version = "0.1.0"
-description = "Walacor AI Security Gateway - data plane for AI-SLOP"
+description = "Walacor AI Security Gateway — audit, governance, and cryptographic lineage for LLM infrastructure"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
@@ -21,8 +21,13 @@ dependencies = [
 
 [project.optional-dependencies]
 redis = ["redis>=5.0"]
+telemetry = [
+  "opentelemetry-sdk>=1.30",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.30",
+]
 dev = [
   "pytest>=8",
+  "anyio[trio]>=4.0",
   "pytest-asyncio>=0.24",
 ]
 
@@ -39,3 +44,6 @@ walacor-gateway = "gateway.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+gateway = ["lineage/static/**"]

@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Walacor Gateway — AI Security & Compliance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0f1419;
+    --ink-soft: #536471;
+    --ink-muted: #8899a6;
+    --paper: #ffffff;
+    --paper-warm: #fafaf8;
+    --accent: #e67700;
+    --accent-light: #fff3e0;
+    --blue: #1971c2;
+    --blue-light: #e3f2fd;
+    --green: #2f9e44;
+    --green-light: #e8f5e9;
+    --red: #e03131;
+    --red-light: #ffebee;
+    --purple: #7048e8;
+    --purple-light: #ede7f6;
+    --violet: #862e9c;
+    --violet-light: #f3e5f5;
+    --gray-100: #f5f5f5;
+    --gray-200: #eeeeee;
+    --gray-300: #e0e0e0;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  @page {
+    size: A4;
+    margin: 0;
+  }
+
+  body {
+    font-family: 'IBM Plex Sans', -apple-system, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    font-size: 11px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    max-height: 297mm;
+    padding: 18mm 16mm 14mm;
+    position: relative;
+    overflow: hidden;
+    page-break-after: always;
+    background: var(--paper);
+  }
+
+  .page:last-child { page-break-after: auto; }
+
+  /* === HEADER BAR === */
+  .header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6mm;
+    padding-bottom: 3mm;
+    border-bottom: 2.5px solid var(--accent);
+  }
+
+  .logo-area {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .logo-mark {
+    width: 28px;
+    height: 28px;
+    background: var(--accent);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-family: 'DM Serif Display', serif;
+    font-size: 16px;
+    font-weight: 700;
+    flex-shrink: 0;
+    position: relative;
+    top: -2px;
+  }
+
+  .logo-text {
+    font-family: 'DM Serif Display', serif;
+    font-size: 20px;
+    color: var(--ink);
+    letter-spacing: -0.3px;
+  }
+
+  .logo-text span {
+    color: var(--accent);
+  }
+
+  .header-tagline {
+    font-size: 9px;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-weight: 500;
+  }
+
+  /* === PAGE 1: HERO === */
+  .hero {
+    text-align: center;
+    margin: 4mm 0 6mm;
+  }
+
+  .hero h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 30px;
+    color: var(--ink);
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+    line-height: 1.15;
+  }
+
+  .hero h1 em {
+    font-style: normal;
+    color: var(--accent);
+  }
+
+  .hero .subtitle {
+    font-size: 13px;
+    color: var(--ink-soft);
+    font-weight: 300;
+    max-width: 420px;
+    margin: 0 auto;
+    line-height: 1.5;
+  }
+
+  /* === ARCHITECTURE DIAGRAM === */
+  .arch-section {
+    margin: 5mm 0 4mm;
+  }
+
+  .arch-diagram {
+    display: grid;
+    grid-template-columns: 120px 1fr 120px;
+    gap: 10px;
+    align-items: center;
+    margin: 3mm 0;
+  }
+
+  .arch-column {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .arch-column-label {
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--ink-muted);
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 2px;
+  }
+
+  .app-box {
+    background: var(--blue-light);
+    border: 1.5px solid var(--blue);
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 10.5px;
+    color: var(--blue);
+  }
+
+  .model-box {
+    background: var(--green-light);
+    border: 1.5px solid var(--green);
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 10.5px;
+    color: var(--green);
+  }
+
+  .gateway-center {
+    background: var(--accent-light);
+    border: 2.5px solid var(--accent);
+    border-radius: 14px;
+    padding: 12px 16px;
+    position: relative;
+  }
+
+  .gateway-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    text-align: center;
+    margin-bottom: 10px;
+  }
+
+  .capability-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .capability {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  .capability .icon {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    flex-shrink: 0;
+    font-weight: 700;
+  }
+
+  .cap-verify { background: var(--green-light); color: var(--green); border: 1px solid var(--green); }
+  .cap-verify .icon { background: var(--green); color: white; }
+  .cap-policy { background: var(--red-light); color: var(--red); border: 1px solid var(--red); }
+  .cap-policy .icon { background: var(--red); color: white; }
+  .cap-safety { background: var(--purple-light); color: var(--purple); border: 1px solid var(--purple); }
+  .cap-safety .icon { background: var(--purple); color: white; }
+  .cap-chain { background: var(--blue-light); color: var(--blue); border: 1px solid var(--blue); }
+  .cap-chain .icon { background: var(--blue); color: white; }
+  .cap-audit { background: var(--accent-light); color: var(--accent); border: 1px solid var(--accent); }
+  .cap-audit .icon { background: var(--accent); color: white; }
+
+  .arrow-col {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .arrow-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ink-muted);
+    font-size: 16px;
+  }
+
+  .arrow-row .line {
+    width: 20px;
+    height: 1.5px;
+    background: var(--ink-muted);
+  }
+
+  /* === AUDIT BOX === */
+  .audit-strip {
+    display: flex;
+    justify-content: center;
+    margin: 3mm 0;
+  }
+
+  .audit-box {
+    background: var(--violet-light);
+    border: 1.5px dashed var(--violet);
+    border-radius: 10px;
+    padding: 8px 28px;
+    text-align: center;
+  }
+
+  .audit-box .title {
+    font-weight: 600;
+    color: var(--violet);
+    font-size: 11px;
+    margin-bottom: 2px;
+  }
+
+  .audit-box .detail {
+    font-size: 9px;
+    color: var(--ink-soft);
+  }
+
+  .audit-arrow {
+    text-align: center;
+    color: var(--violet);
+    font-size: 14px;
+    margin: 1mm 0;
+  }
+
+  /* === VALUE PROPS === */
+  .value-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin: 5mm 0 3mm;
+  }
+
+  .value-card {
+    background: var(--paper-warm);
+    border: 1px solid var(--gray-300);
+    border-radius: 10px;
+    padding: 10px 12px;
+    text-align: center;
+  }
+
+  .value-card .number {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 2px;
+  }
+
+  .value-card .label {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--ink);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 3px;
+  }
+
+  .value-card .desc {
+    font-size: 8.5px;
+    color: var(--ink-soft);
+    line-height: 1.4;
+  }
+
+  /* === BEFORE / AFTER === */
+  .ba-section {
+    margin: 4mm 0;
+  }
+
+  .section-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 17px;
+    color: var(--ink);
+    margin-bottom: 3mm;
+    padding-bottom: 2mm;
+    border-bottom: 1px solid var(--gray-200);
+  }
+
+  .section-title span {
+    color: var(--accent);
+  }
+
+  .ba-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .ba-col {
+    padding: 10px 14px;
+    border-radius: 10px;
+  }
+
+  .ba-before {
+    background: #fff5f5;
+    border: 1.5px solid var(--red);
+  }
+
+  .ba-after {
+    background: #f0fdf4;
+    border: 1.5px solid var(--green);
+  }
+
+  .ba-col h3 {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+
+  .ba-before h3 { color: var(--red); }
+  .ba-after h3 { color: var(--green); }
+
+  .ba-col ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .ba-col li {
+    font-size: 9.5px;
+    padding: 3px 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    line-height: 1.4;
+  }
+
+  .ba-col li .mark {
+    flex-shrink: 0;
+    font-weight: 700;
+    font-size: 10px;
+  }
+
+  .ba-before li .mark { color: var(--red); }
+  .ba-after li .mark { color: var(--green); }
+
+  /* === PAGE 2 === */
+  .page2-header {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    color: var(--ink);
+    margin-bottom: 2mm;
+    line-height: 1.2;
+  }
+
+  .page2-header em {
+    font-style: normal;
+    color: var(--accent);
+  }
+
+  .page2-subtitle {
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-bottom: 5mm;
+    font-weight: 300;
+  }
+
+  /* === REQUEST FLOW === */
+  .flow-section {
+    margin: 3mm 0 4mm;
+  }
+
+  .flow-pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+    margin: 2mm 12mm;
+  }
+
+  .flow-step {
+    display: grid;
+    grid-template-columns: 32px 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 12px;
+    border-radius: 8px;
+    position: relative;
+    margin-bottom: 2px;
+  }
+
+  .flow-step .step-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: white;
+    flex-shrink: 0;
+  }
+
+  .flow-step .step-content {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .flow-step .step-title {
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+
+  .flow-step .step-desc {
+    font-size: 8.5px;
+    color: var(--ink-soft);
+  }
+
+  .flow-step .step-badge {
+    font-size: 7.5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  .flow-connector {
+    width: 1.5px;
+    height: 6px;
+    background: var(--gray-300);
+    margin-left: 23px;
+  }
+
+  .step-blue { background: #e3f2fd; }
+  .step-blue .step-num { background: var(--blue); }
+  .step-blue .step-title { color: var(--blue); }
+
+  .step-green { background: #e8f5e9; }
+  .step-green .step-num { background: var(--green); }
+  .step-green .step-title { color: var(--green); }
+
+  .step-red { background: #ffebee; }
+  .step-red .step-num { background: var(--red); }
+  .step-red .step-title { color: var(--red); }
+
+  .step-gray { background: var(--gray-100); }
+  .step-gray .step-num { background: #495057; }
+  .step-gray .step-title { color: #495057; }
+
+  .step-purple { background: #ede7f6; }
+  .step-purple .step-num { background: var(--purple); }
+  .step-purple .step-title { color: var(--purple); }
+
+  .step-orange { background: var(--accent-light); }
+  .step-orange .step-num { background: var(--accent); }
+  .step-orange .step-title { color: var(--accent); }
+
+  .badge-block { background: #ffcdd2; color: var(--red); }
+  .badge-record { background: #fff3e0; color: var(--accent); }
+  .badge-scan { background: #e8eaf6; color: var(--purple); }
+
+  /* === SESSION CHAIN === */
+  .chain-section {
+    margin: 4mm 0;
+  }
+
+  .chain-visual {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    justify-content: center;
+    margin: 3mm 0 2mm;
+  }
+
+  .chain-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .chain-node {
+    width: 60px;
+    height: 38px;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    font-weight: 600;
+    border: 1.5px solid;
+  }
+
+  .chain-node-valid {
+    background: var(--green-light);
+    border-color: var(--green);
+    color: var(--green);
+  }
+
+  .chain-node-tamper {
+    background: #ffebee;
+    border-color: var(--red);
+    color: var(--red);
+  }
+
+  .chain-hash {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 6.5px;
+    color: var(--ink-muted);
+    max-width: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chain-link {
+    color: var(--green);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .chain-link-broken {
+    color: var(--red);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .chain-caption {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    margin-top: 2mm;
+  }
+
+  .chain-caption-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 8px;
+  }
+
+  .chain-caption-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  /* === CONTENT SAFETY === */
+  .safety-section {
+    margin: 4mm 0;
+  }
+
+  .safety-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin: 2mm 0;
+  }
+
+  .safety-card {
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: center;
+    border: 1px solid;
+  }
+
+  .safety-card .s-icon {
+    font-size: 18px;
+    margin-bottom: 3px;
+  }
+
+  .safety-card h4 {
+    font-size: 10px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+
+  .safety-card p {
+    font-size: 8px;
+    color: var(--ink-soft);
+    line-height: 1.3;
+  }
+
+  .safety-pii { background: #e3f2fd; border-color: var(--blue); }
+  .safety-pii h4 { color: var(--blue); }
+  .safety-toxic { background: #ede7f6; border-color: var(--purple); }
+  .safety-toxic h4 { color: var(--purple); }
+  .safety-guard { background: #fff3e0; border-color: var(--accent); }
+  .safety-guard h4 { color: var(--accent); }
+
+  /* === DEPLOY === */
+  .deploy-section {
+    margin: 4mm 0;
+  }
+
+  .deploy-steps {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin: 2mm 0;
+  }
+
+  .deploy-step {
+    text-align: center;
+    padding: 10px 8px;
+    background: var(--paper-warm);
+    border-radius: 10px;
+    border: 1px solid var(--gray-300);
+  }
+
+  .deploy-step .d-num {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .deploy-step .d-title {
+    font-size: 10px;
+    font-weight: 700;
+    margin: 3px 0 2px;
+    color: var(--ink);
+  }
+
+  .deploy-step .d-code {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 7.5px;
+    color: var(--ink-soft);
+    background: var(--gray-100);
+    padding: 3px 6px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-top: 2px;
+  }
+
+  .deploy-targets {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 2mm;
+  }
+
+  .deploy-target {
+    font-size: 8.5px;
+    color: var(--ink-soft);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .deploy-target .dot {
+    width: 6px;
+    height: 6px;
+    background: var(--green);
+    border-radius: 50%;
+  }
+
+  /* === FOOTER === */
+  .page-footer {
+    position: absolute;
+    bottom: 10mm;
+    left: 16mm;
+    right: 16mm;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 3mm;
+    border-top: 1px solid var(--gray-200);
+  }
+
+  .footer-left {
+    font-size: 8px;
+    color: var(--ink-muted);
+  }
+
+  .footer-right {
+    font-size: 8px;
+    color: var(--ink-muted);
+  }
+
+  .footer-right a {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 500;
+  }
+
+  /* === PRINT === */
+  @media print {
+    body { background: white; }
+    .page {
+      width: 100%;
+      min-height: 100vh;
+      max-height: 100vh;
+      margin: 0;
+      box-shadow: none;
+    }
+  }
+
+  /* === SCREEN PREVIEW === */
+  @media screen {
+    body {
+      background: #e8e8e8;
+      padding: 20px 0;
+    }
+    .page {
+      margin: 0 auto 20px;
+      box-shadow: 0 2px 20px rgba(0,0,0,0.12);
+      border-radius: 2px;
+    }
+  }
+
+  /* === PILL TAGS === */
+  .tag-row {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin: 3mm 0;
+  }
+
+  .tag {
+    font-size: 8px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+  }
+
+  .tag-orange { background: var(--accent-light); color: var(--accent); border: 1px solid var(--accent); }
+  .tag-blue { background: var(--blue-light); color: var(--blue); border: 1px solid var(--blue); }
+  .tag-green { background: var(--green-light); color: var(--green); border: 1px solid var(--green); }
+
+  /* Arrow connectors */
+  .arrow-pipe {
+    font-size: 18px;
+    color: var(--ink-muted);
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  /* Two-column layout for page 2 bottom */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== PAGE 1 ===================== -->
+<div class="page">
+  <div class="header-bar">
+    <div class="logo-area">
+      <div class="logo-mark">W</div>
+      <div class="logo-text">Walacor <span>Gateway</span></div>
+    </div>
+    <div class="header-tagline">AI Security & Compliance Infrastructure</div>
+  </div>
+
+  <div class="hero">
+    <h1>Govern Every AI Request.<br><em>Prove It Happened.</em></h1>
+    <p class="subtitle">One transparent layer between your applications and AI models — adding security, compliance, and cryptographic proof with zero code changes.</p>
+  </div>
+
+  <div class="tag-row">
+    <span class="tag tag-orange">Zero Code Changes</span>
+    <span class="tag tag-blue">Every Request Governed</span>
+    <span class="tag tag-green">Cryptographic Proof</span>
+  </div>
+
+  <!-- Architecture Diagram -->
+  <div class="arch-section">
+    <div class="section-title">How It <span>Works</span></div>
+
+    <div class="arch-diagram">
+      <!-- Left: Apps -->
+      <div class="arch-column">
+        <div class="arch-column-label">Your Apps</div>
+        <div class="app-box">Chat App</div>
+        <div class="app-box">AI Agents</div>
+        <div class="app-box">Internal Tools</div>
+      </div>
+
+      <!-- Center: Gateway -->
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+        <div style="display: grid; grid-template-columns: 30px 1fr 30px; width: 100%; align-items: center;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+            <div class="arrow-pipe">&rarr;</div>
+            <div class="arrow-pipe">&rarr;</div>
+            <div class="arrow-pipe">&rarr;</div>
+          </div>
+          <div class="gateway-center">
+            <div class="gateway-title">Walacor Gateway</div>
+            <div class="capability-list">
+              <div class="capability cap-verify">
+                <div class="icon">&#10003;</div>
+                <span>Verify Model Identity</span>
+              </div>
+              <div class="capability cap-policy">
+                <div class="icon">&#9632;</div>
+                <span>Enforce Security Policies</span>
+              </div>
+              <div class="capability cap-safety">
+                <div class="icon">&#9670;</div>
+                <span>Scan for Unsafe Content</span>
+              </div>
+              <div class="capability cap-chain">
+                <div class="icon">&#8734;</div>
+                <span>Link Every Conversation</span>
+              </div>
+              <div class="capability cap-audit">
+                <div class="icon">&#9679;</div>
+                <span>Record Everything</span>
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+            <div class="arrow-pipe">&rarr;</div>
+            <div class="arrow-pipe">&rarr;</div>
+            <div class="arrow-pipe">&rarr;</div>
+          </div>
+        </div>
+
+        <div class="audit-arrow">&darr;</div>
+        <div class="audit-box">
+          <div class="title">Tamper-Proof Audit Trail</div>
+          <div class="detail">SHA3-512 session chain &middot; every prompt, response, tool call recorded</div>
+        </div>
+      </div>
+
+      <!-- Right: Models -->
+      <div class="arch-column">
+        <div class="arch-column-label">AI Models</div>
+        <div class="model-box">OpenAI / GPT</div>
+        <div class="model-box">Anthropic / Claude</div>
+        <div class="model-box">Ollama / Local</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Before / After -->
+  <div class="ba-section">
+    <div class="section-title">Before & <span>After</span></div>
+    <div class="ba-grid">
+      <div class="ba-col ba-before">
+        <h3>&times; Without Gateway</h3>
+        <ul>
+          <li><span class="mark">&times;</span> No record of what AI was asked or answered</li>
+          <li><span class="mark">&times;</span> Any model, any prompt — no guardrails</li>
+          <li><span class="mark">&times;</span> PII and sensitive data leak into AI providers</li>
+          <li><span class="mark">&times;</span> No proof for auditors or regulators</li>
+          <li><span class="mark">&times;</span> Token costs spiral with no visibility</li>
+        </ul>
+      </div>
+      <div class="ba-col ba-after">
+        <h3>&#10003; With Gateway</h3>
+        <ul>
+          <li><span class="mark">&#10003;</span> Every prompt and response recorded and hashed</li>
+          <li><span class="mark">&#10003;</span> Only approved models serve requests</li>
+          <li><span class="mark">&#10003;</span> Content scanned for PII, toxicity, and safety</li>
+          <li><span class="mark">&#10003;</span> Cryptographic session chain proves integrity</li>
+          <li><span class="mark">&#10003;</span> Per-user, per-tenant token budgets enforced</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Value Props -->
+  <div class="value-grid">
+    <div class="value-card">
+      <div class="number">0</div>
+      <div class="label">Code Changes</div>
+      <div class="desc">Drop-in ASGI proxy. Point your apps at the gateway instead of the provider.</div>
+    </div>
+    <div class="value-card">
+      <div class="number">100%</div>
+      <div class="label">Request Coverage</div>
+      <div class="desc">Completeness middleware guarantees every request gets an audit record.</div>
+    </div>
+    <div class="value-card">
+      <div class="number">SHA3</div>
+      <div class="label">Crypto Proof</div>
+      <div class="desc">Each record hash-chained to the previous. Tampering breaks the chain visibly.</div>
+    </div>
+  </div>
+
+  <div class="page-footer">
+    <div class="footer-left">Walacor Gateway &middot; Confidential</div>
+    <div class="footer-right">Page 1 of 2 &middot; <a href="#">walacor.com</a></div>
+  </div>
+</div>
+
+<!-- ===================== PAGE 2 ===================== -->
+<div class="page">
+  <div class="header-bar">
+    <div class="logo-area">
+      <div class="logo-mark">W</div>
+      <div class="logo-text">Walacor <span>Gateway</span></div>
+    </div>
+    <div class="header-tagline">Architecture Deep Dive</div>
+  </div>
+
+  <div class="page2-header">What Happens to <em>Every Request</em></div>
+  <p class="page2-subtitle">Each AI request passes through five security checks — before and after the model responds.</p>
+
+  <!-- Request Flow -->
+  <div class="flow-section">
+    <div class="flow-pipeline">
+      <div class="flow-step step-blue">
+        <div class="step-num">&bull;</div>
+        <div class="step-content">
+          <div class="step-title">Request Arrives</div>
+          <div class="step-desc">Application sends a question to an AI model via the gateway</div>
+        </div>
+        <div></div>
+      </div>
+      <div class="flow-connector"></div>
+
+      <div class="flow-step step-green">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <div class="step-title">Verify the Model</div>
+          <div class="step-desc">Is this an approved, registered AI model?</div>
+        </div>
+        <div class="step-badge badge-block">Blocks unknown</div>
+      </div>
+      <div class="flow-connector"></div>
+
+      <div class="flow-step step-red">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <div class="step-title">Check Security Rules</div>
+          <div class="step-desc">Does this request comply with company policy?</div>
+        </div>
+        <div class="step-badge badge-block">Blocks violations</div>
+      </div>
+      <div class="flow-connector"></div>
+
+      <div class="flow-step step-gray">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <div class="step-title">Forward to AI Model</div>
+          <div class="step-desc">Request goes to the actual AI provider (OpenAI, Anthropic, Ollama)</div>
+        </div>
+        <div></div>
+      </div>
+      <div class="flow-connector"></div>
+
+      <div class="flow-step step-purple">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <div class="step-title">Scan the Response</div>
+          <div class="step-desc">Check for PII, harmful content, and safety issues</div>
+        </div>
+        <div class="step-badge badge-scan">3 analyzers</div>
+      </div>
+      <div class="flow-connector"></div>
+
+      <div class="flow-step step-orange">
+        <div class="step-num">5</div>
+        <div class="step-content">
+          <div class="step-title">Create Cryptographic Record</div>
+          <div class="step-desc">Link to session chain + write tamper-proof audit record</div>
+        </div>
+        <div class="step-badge badge-record">SHA3-512</div>
+      </div>
+      <div class="flow-connector"></div>
+
+      <div class="flow-step step-blue">
+        <div class="step-num">&bull;</div>
+        <div class="step-content">
+          <div class="step-title">Response Returned</div>
+          <div class="step-desc">Clean, governed response sent back to the application</div>
+        </div>
+        <div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <!-- Session Chain -->
+    <div>
+      <div class="section-title">Session <span>Chain</span></div>
+      <p style="font-size: 9px; color: var(--ink-soft); margin: 1mm 0 2mm;">Every record in a session links to the previous via hash. If anyone edits a record, the chain breaks — and the dashboard shows it instantly.</p>
+
+      <div class="chain-visual">
+        <div class="chain-block">
+          <div class="chain-node chain-node-valid">Turn 1<br><span style="font-size:6px;">genesis</span></div>
+          <div class="chain-hash">a3f8c1...</div>
+        </div>
+        <div class="chain-link">&rarr;</div>
+        <div class="chain-block">
+          <div class="chain-node chain-node-valid">Turn 2</div>
+          <div class="chain-hash">7b2e9d...</div>
+        </div>
+        <div class="chain-link">&rarr;</div>
+        <div class="chain-block">
+          <div class="chain-node chain-node-valid">Turn 3</div>
+          <div class="chain-hash">f14a08...</div>
+        </div>
+        <div class="chain-link">&rarr;</div>
+        <div class="chain-block">
+          <div class="chain-node chain-node-valid">Turn 4</div>
+          <div class="chain-hash">9c6b3e...</div>
+        </div>
+      </div>
+
+      <div style="text-align: center; margin: 1mm 0;">
+        <span style="font-size: 8px; color: var(--green); font-weight: 600;">&#10003; Chain intact — full integrity verified</span>
+      </div>
+
+      <div class="chain-visual" style="margin-top: 2mm;">
+        <div class="chain-block">
+          <div class="chain-node chain-node-valid">Turn 1</div>
+          <div class="chain-hash">a3f8c1...</div>
+        </div>
+        <div class="chain-link">&rarr;</div>
+        <div class="chain-block">
+          <div class="chain-node chain-node-tamper">EDITED!</div>
+          <div class="chain-hash" style="color: var(--red);">TAMPERED</div>
+        </div>
+        <div class="chain-link-broken">&times;</div>
+        <div class="chain-block">
+          <div class="chain-node chain-node-tamper">Turn 3</div>
+          <div class="chain-hash" style="color: var(--red);">mismatch</div>
+        </div>
+        <div class="chain-link-broken">&times;</div>
+        <div class="chain-block">
+          <div class="chain-node chain-node-tamper">Turn 4</div>
+          <div class="chain-hash" style="color: var(--red);">mismatch</div>
+        </div>
+      </div>
+
+      <div style="text-align: center; margin: 1mm 0;">
+        <span style="font-size: 8px; color: var(--red); font-weight: 600;">&times; Chain broken — tampering detected at Turn 2</span>
+      </div>
+    </div>
+
+    <!-- Content Safety + Deploy -->
+    <div>
+      <div class="section-title">Content <span>Safety</span></div>
+      <p style="font-size: 9px; color: var(--ink-soft); margin: 1mm 0 2mm;">Three independent analyzers scan every response in parallel:</p>
+
+      <div class="safety-grid" style="grid-template-columns: 1fr 1fr 1fr; margin-bottom: 4mm;">
+        <div class="safety-card safety-pii">
+          <div class="s-icon">&#128274;</div>
+          <h4>PII Scanner</h4>
+          <p>Detects emails, SSNs, phone numbers</p>
+        </div>
+        <div class="safety-card safety-toxic">
+          <div class="s-icon">&#9888;</div>
+          <h4>Toxicity</h4>
+          <p>Flags harmful or offensive content</p>
+        </div>
+        <div class="safety-card safety-guard">
+          <div class="s-icon">&#128737;</div>
+          <h4>Llama Guard</h4>
+          <p>14 safety categories (S1-S14)</p>
+        </div>
+      </div>
+
+      <div class="section-title">Deploy in <span>Minutes</span></div>
+
+      <div class="deploy-steps">
+        <div class="deploy-step">
+          <div class="d-num">1</div>
+          <div class="d-title">Install</div>
+          <div class="d-code">pip install walacor-gateway</div>
+        </div>
+        <div class="deploy-step">
+          <div class="d-num">2</div>
+          <div class="d-title">Configure</div>
+          <div class="d-code">export WALACOR_*=...</div>
+        </div>
+        <div class="deploy-step">
+          <div class="d-num">3</div>
+          <div class="d-title">Run</div>
+          <div class="d-code">walacor-gateway</div>
+        </div>
+      </div>
+
+      <div class="deploy-targets">
+        <div class="deploy-target"><div class="dot"></div> Docker / Docker Compose</div>
+        <div class="deploy-target"><div class="dot"></div> Kubernetes / Helm</div>
+        <div class="deploy-target"><div class="dot"></div> Bare Metal</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-footer">
+    <div class="footer-left">Walacor Gateway &middot; Confidential</div>
+    <div class="footer-right">Page 2 of 2 &middot; <a href="#">walacor.com</a></div>
+  </div>
+</div>
+
+</body>
+</html>

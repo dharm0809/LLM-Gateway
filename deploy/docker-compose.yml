@@ -2,6 +2,7 @@
 # Required host env vars: WALACOR_SERVER, WALACOR_USERNAME, WALACOR_PASSWORD
 # Optional: WALACOR_CONTROL_PLANE_URL, OPENAI_API_KEY, ANTHROPIC_API_KEY
 # To start with Redis: docker-compose --profile redis up
+# To run the full demo: docker compose --profile demo up
 version: "3.8"
 services:
   redis:
@@ -10,6 +11,21 @@ services:
     ports:
       - "6379:6379"
     command: redis-server --save "" --appendonly no
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [demo, ollama]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
 
   gateway:
     build:
@@ -31,7 +47,9 @@ services:
       # Provider credentials
       - WALACOR_PROVIDER_OPENAI_KEY=${OPENAI_API_KEY:-}
       - WALACOR_PROVIDER_ANTHROPIC_KEY=${ANTHROPIC_API_KEY:-}
-      - WALACOR_PROVIDER_OLLAMA_URL=${WALACOR_PROVIDER_OLLAMA_URL:-}
+      # Ollama: point at the companion service in demo profile
+      - WALACOR_PROVIDER_OLLAMA_URL=${WALACOR_PROVIDER_OLLAMA_URL:-http://ollama:11434}
+      - WALACOR_GATEWAY_PROVIDER=${WALACOR_GATEWAY_PROVIDER:-ollama}
       # Caller auth (comma-separated API keys)
       - WALACOR_GATEWAY_API_KEYS=${WALACOR_GATEWAY_API_KEYS:-}
       # WAL path (used only when Walacor storage is not configured)
@@ -39,6 +57,18 @@ services:
       # Phase 15: Redis + model routing
       - WALACOR_REDIS_URL=${WALACOR_REDIS_URL:-}
       - WALACOR_MODEL_ROUTING_JSON=${WALACOR_MODEL_ROUTING_JSON:-}
+      # Phase 16: Web search (disabled by default)
+      - WALACOR_TOOL_AWARE_ENABLED=${WALACOR_TOOL_AWARE_ENABLED:-false}
+      - WALACOR_WEB_SEARCH_ENABLED=${WALACOR_WEB_SEARCH_ENABLED:-false}
+      # Phase 17: Thinking strip + Llama Guard + OTel
+      - WALACOR_THINKING_STRIP_ENABLED=${WALACOR_THINKING_STRIP_ENABLED:-true}
+      - WALACOR_LLAMA_GUARD_ENABLED=${WALACOR_LLAMA_GUARD_ENABLED:-false}
+      - WALACOR_OTEL_ENABLED=${WALACOR_OTEL_ENABLED:-false}
+      - WALACOR_OTEL_ENDPOINT=${WALACOR_OTEL_ENDPOINT:-http://localhost:4317}
+      # Phase 18: Lineage dashboard
+      - WALACOR_LINEAGE_ENABLED=${WALACOR_LINEAGE_ENABLED:-true}
+      # Phase 20: Embedded control plane
+      - WALACOR_CONTROL_PLANE_ENABLED=${WALACOR_CONTROL_PLANE_ENABLED:-true}
       # Observability
       - WALACOR_LOG_LEVEL=${WALACOR_LOG_LEVEL:-INFO}
     volumes:
@@ -47,6 +77,9 @@ services:
       redis:
         condition: service_started
         required: false
+      ollama:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -54,5 +87,23 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+
+  demo-init:
+    image: python:3.12-slim
+    profiles: [demo]
+    command: python /demo/quickstart.py
+    depends_on:
+      gateway:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ../demo:/demo
+    environment:
+      - GATEWAY_URL=http://gateway:8000
+      - DEMO_MODEL=${DEMO_MODEL:-qwen3:4b}
+      - OLLAMA_URL=http://ollama:11434
+
 volumes:
   gateway-wal: {}
+  ollama_data: {}

@@ -7,13 +7,18 @@ from gateway.adapters.openai import OpenAIAdapter, _concat_messages
 from gateway.adapters.base import ModelCall, ModelResponse
 
 
+@pytest.fixture(params=["asyncio"])
+def anyio_backend(request):
+    return request.param
+
+
 def test_concat_messages():
     assert _concat_messages([{"content": "Hi"}, {"content": "Bye"}]) == "Hi\nBye"
     assert _concat_messages([{"role": "user", "content": "Hello"}]) == "Hello"
     assert _concat_messages([]) == ""
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_openai_adapter_parse_request():
     adapter = OpenAIAdapter(base_url="https://api.openai.com", api_key="sk-test")
     body = b'{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'

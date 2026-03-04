@@ -54,6 +54,30 @@ class Settings(BaseSettings):
     toxicity_detection_enabled: bool = Field(default=False, description="Enable built-in toxicity detector (walacor.toxicity.v1)")
     toxicity_deny_terms: str = Field(default="", description="Comma-separated extra deny-list terms for toxicity detector")
 
+    # Phase 17: Reasoning model support
+    thinking_strip_enabled: bool = Field(
+        default=True,
+        description="Strip <think>...</think> reasoning tokens from Ollama responses before audit record.",
+    )
+
+    # Phase 17: Llama Guard safety classifier
+    llama_guard_enabled: bool = Field(
+        default=False,
+        description="Enable Llama Guard 3 content analyzer (requires ollama pull llama-guard3).",
+    )
+    llama_guard_model: str = Field(
+        default="llama-guard3",
+        description="Ollama model name for Llama Guard 3 inference.",
+    )
+    llama_guard_ollama_url: str = Field(
+        default="",
+        description="Ollama URL for Llama Guard inference. Defaults to WALACOR_PROVIDER_OLLAMA_URL if empty.",
+    )
+    llama_guard_timeout_ms: int = Field(
+        default=5000,
+        description="Llama Guard inference timeout in ms (inference takes 500ms–2s; default 5000ms).",
+    )
+
     # Phase 11: Token budget
     token_budget_enabled: bool = Field(default=False, description="Enable token budget enforcement")
     token_budget_period: str = Field(default="monthly", description="Budget period: 'daily' or 'monthly'")
@@ -84,6 +108,21 @@ class Settings(BaseSettings):
     generic_model_path: str = Field(default="$.model", description="JSON path for model ID")
     generic_prompt_path: str = Field(default="$.messages[*].content", description="JSON path for prompt")
     generic_response_path: str = Field(default="$.choices[0].message.content", description="JSON path for response")
+    generic_auto_detect: bool = Field(
+        default=True,
+        description=(
+            "When true, GenericAdapter auto-detects OpenAI-compat, HuggingFace, and "
+            "Ollama-native REST formats and enriches audit metadata. "
+            "Manual WALACOR_GENERIC_*_PATH overrides remain as fallback."
+        ),
+    )
+    ollama_digest_cache_ttl: int = Field(
+        default=1800,
+        description=(
+            "TTL in seconds for the per-instance Ollama model digest cache. "
+            "Set to 0 to disable caching (always fetches fresh from /api/show)."
+        ),
+    )
 
     # Walacor backend storage (replaces SQLite WAL when configured)
     # validation_alias bypasses env_prefix so the env vars are exactly:
@@ -141,6 +180,25 @@ class Settings(BaseSettings):
         default="",
         description="JSON array of MCP server configs, or path to a JSON file. Required for active strategy.",
     )
+    web_search_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable built-in web search tool for local/private models (Ollama active strategy). "
+            "When enabled, the 'web_search' tool is auto-registered and injected into Ollama requests."
+        ),
+    )
+    web_search_provider: str = Field(
+        default="duckduckgo",
+        description="Web search backend: 'duckduckgo' (no key), 'brave' (API key, free tier), 'serpapi' (API key).",
+    )
+    web_search_api_key: str = Field(
+        default="",
+        description="API key for web search provider (required for 'brave' and 'serpapi').",
+    )
+    web_search_max_results: int = Field(
+        default=5,
+        description="Default number of search results returned per query.",
+    )
 
     # Phase 15: Multi-model routing + Redis state sharing
     redis_url: str = Field(
@@ -180,6 +238,36 @@ class Settings(BaseSettings):
     metrics_enabled: bool = Field(default=True, description="Enable Prometheus /metrics")
     log_level: str = Field(default="INFO", description="Logging level")
 
+    # Phase 20: Embedded control plane
+    control_plane_enabled: bool = Field(
+        default=True,
+        description="Enable embedded control plane (SQLite-backed CRUD + dashboard tab).",
+    )
+    control_plane_db_path: str = Field(
+        default="",
+        description="SQLite path for control plane state. Default: alongside WAL db.",
+    )
+
+    # Phase 18: Lineage dashboard
+    lineage_enabled: bool = Field(
+        default=True,
+        description="Enable /lineage/ dashboard and /v1/lineage/* API endpoints.",
+    )
+
+    # Phase 17: OpenTelemetry export
+    otel_enabled: bool = Field(
+        default=False,
+        description="Enable OpenTelemetry span export (requires pip install 'walacor-gateway[telemetry]').",
+    )
+    otel_endpoint: str = Field(
+        default="http://localhost:4317",
+        description="OTLP gRPC endpoint for trace export (e.g. Jaeger, Datadog, Grafana).",
+    )
+    otel_service_name: str = Field(
+        default="walacor-gateway",
+        description="OTel service.name resource attribute.",
+    )
+
     @property
     def api_keys_list(self) -> list[str]:
         return [k.strip() for k in self.gateway_api_keys.split(",") if k.strip()]
@@ -207,10 +295,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def require_tenant_and_control_plane_when_governance_on(self) -> "Settings":
         if not self.skip_governance and not self.walacor_storage_enabled:
+            # Embedded control plane (control_plane_enabled=True) removes the
+            # hard requirement for a remote control_plane_url — models are
+            # auto-attested and policies loaded from local SQLite.
+            if self.control_plane_enabled:
+                return self
             if not (self.gateway_tenant_id and self.control_plane_url):
                 raise ValueError(
                     "WALACOR_GATEWAY_TENANT_ID and WALACOR_CONTROL_PLANE_URL are required "
-                    "when skip_governance is False and Walacor storage is not configured"
+                    "when skip_governance is False, control_plane_enabled is False, "
+                    "and Walacor storage is not configured"
                 )
         return self
 

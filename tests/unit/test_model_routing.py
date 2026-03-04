@@ -137,6 +137,18 @@ def test_empty_pattern_does_not_match(monkeypatch):
     assert isinstance(adapter, OpenAIAdapter)
 
 
+def test_unknown_provider_in_matching_route_falls_through_to_next_route(monkeypatch):
+    """A route whose pattern matches but provider is unknown is skipped; next valid route wins."""
+    _set_routing_env(monkeypatch, [
+        {"pattern": "gpt-*", "provider": "unknown_provider", "url": "http://x.com", "key": ""},
+        {"pattern": "gpt-*", "provider": "openai", "url": "https://api.openai.com", "key": "sk-x"},
+    ])
+    # First route matches "gpt-4" but _make_adapter_for_route returns None → skipped
+    # Second route also matches and produces a valid OpenAI adapter
+    adapter = _resolve_adapter("/v1/chat/completions", "gpt-4")
+    assert isinstance(adapter, OpenAIAdapter)
+
+
 # ---------------------------------------------------------------------------
 # _peek_model_id
 # ---------------------------------------------------------------------------
@@ -193,3 +205,58 @@ async def test_peek_model_id_none_value_returns_empty():
 
     result = await _peek_model_id(request)
     assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# handle_request → _peek_model_id gate (T3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_handle_request_calls_peek_when_model_routes_set(monkeypatch):
+    """_peek_model_id is awaited when model_routes is non-empty, and its result reaches _resolve_adapter."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from gateway.pipeline.orchestrator import handle_request
+
+    _set_routing_env(monkeypatch, [
+        {"pattern": "gpt-*", "provider": "openai", "url": "https://api.openai.com", "key": "sk-x"},
+    ])
+
+    mock_request = MagicMock()
+    mock_request.method = "POST"
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.state = MagicMock()
+
+    captured = {}
+
+    def fake_resolve(path, model_id=""):
+        captured["model_id"] = model_id
+        return None  # triggers 404 early return
+
+    with patch("gateway.pipeline.orchestrator._peek_model_id", new=AsyncMock(return_value="gpt-4")) as mock_peek, \
+         patch("gateway.pipeline.orchestrator._resolve_adapter", side_effect=fake_resolve):
+        resp = await handle_request(mock_request)
+
+    mock_peek.assert_awaited_once()
+    assert captured.get("model_id") == "gpt-4"
+    assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_handle_request_skips_peek_when_no_model_routes(monkeypatch):
+    """_peek_model_id is NOT called when model_routes is empty (short-circuit)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from gateway.pipeline.orchestrator import handle_request
+
+    _set_routing_env(monkeypatch, [])  # empty routing table
+
+    mock_request = MagicMock()
+    mock_request.method = "POST"
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.state = MagicMock()
+
+    with patch("gateway.pipeline.orchestrator._peek_model_id", new=AsyncMock(return_value="gpt-4")) as mock_peek, \
+         patch("gateway.pipeline.orchestrator._resolve_adapter", return_value=None):
+        await handle_request(mock_request)
+
+    mock_peek.assert_not_awaited()

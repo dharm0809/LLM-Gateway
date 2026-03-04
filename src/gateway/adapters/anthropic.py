@@ -12,6 +12,7 @@ Phase 14 additions:
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import httpx
@@ -150,8 +151,7 @@ class AnthropicAdapter(ProviderAdapter):
         metadata: dict[str, Any] = {}
         if request.headers.get("x-user-id"):
             metadata["user"] = request.headers["x-user-id"]
-        if request.headers.get("x-session-id"):
-            metadata["session_id"] = request.headers["x-session-id"]
+        metadata["session_id"] = request.headers.get("x-session-id") or str(uuid.uuid4())
         # System prompt (top-level Anthropic field, not in messages array)
         system_raw = data.get("system", "")
         if isinstance(system_raw, list):

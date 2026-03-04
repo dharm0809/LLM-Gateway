@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -35,14 +35,14 @@ class SessionChainTracker:
         self._max = max_sessions
         self._ttl = ttl_seconds
         self._sessions: dict[str, SessionState] = {}
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
     async def next_chain_values(self, session_id: str) -> tuple[int, str]:
         """
         Return (sequence_number, previous_record_hash) for the next record in this session.
         First record in a new session returns (0, GENESIS_HASH).
         """
-        with self._lock:
+        async with self._lock:
             state = self._sessions.get(session_id)
             if state is None:
                 return 0, _GENESIS_HASH
@@ -51,7 +51,7 @@ class SessionChainTracker:
     async def update(self, session_id: str, sequence_number: int, record_hash: str) -> None:
         """Record the chain state after a WAL write. Evicts stale sessions when over limit."""
         now = datetime.now(timezone.utc)
-        with self._lock:
+        async with self._lock:
             self._sessions[session_id] = SessionState(
                 session_id=session_id,
                 last_sequence_number=sequence_number,
@@ -76,8 +76,7 @@ class SessionChainTracker:
             del self._sessions[oldest]
 
     def active_session_count(self) -> int:
-        with self._lock:
-            return len(self._sessions)
+        return len(self._sessions)
 
 
 class RedisSessionChainTracker:
@@ -110,42 +109,38 @@ class RedisSessionChainTracker:
         matching in-memory SessionChainTracker.  No mutation happens here —
         update() atomically writes both seq and hash after a successful write.
         This eliminates orphan sequence-number gaps on write failure (Finding 3).
+
+        Raises on Redis error — callers must catch and skip chain fields rather
+        than forging (0, GENESIS_HASH) for an established session, which would
+        silently corrupt the Merkle chain.
         """
         key = self._key(session_id)
-        try:
-            async with self._r.pipeline(transaction=True) as pipe:
-                pipe.hget(key, self._HASH_FIELD_SEQ)
-                pipe.hget(key, self._HASH_FIELD_HASH)
-                pipe.expire(key, self._ttl)
-                raw_seq, raw_hash, _ = await pipe.execute()
-            last_seq = int(raw_seq) if raw_seq else -1
-            seq_num = last_seq + 1  # 0 for the first record (matches in-memory; Finding 1)
-            prev_hash = (
-                (raw_hash.decode() if isinstance(raw_hash, bytes) else raw_hash)
-                if raw_hash else GENESIS_HASH
-            )
-            return seq_num, prev_hash
-        except Exception:
-            logger.error(
-                "Redis session chain next_chain_values failed: session_id=%s", session_id,
-                exc_info=True,
-            )
-            return 0, GENESIS_HASH
+        async with self._r.pipeline(transaction=True) as pipe:
+            pipe.hget(key, self._HASH_FIELD_SEQ)
+            pipe.hget(key, self._HASH_FIELD_HASH)
+            pipe.expire(key, self._ttl)
+            raw_seq, raw_hash, _ = await pipe.execute()
+        last_seq = int(raw_seq) if raw_seq else -1
+        seq_num = last_seq + 1  # 0 for the first record (matches in-memory; Finding 1)
+        prev_hash = (
+            (raw_hash.decode() if isinstance(raw_hash, bytes) else raw_hash)
+            if raw_hash else GENESIS_HASH
+        )
+        return seq_num, prev_hash
 
     async def update(self, session_id: str, seq_num: int, record_hash: str) -> None:
-        """Atomically write seq and hash after a successful record write."""
+        """Atomically write seq and hash after a successful record write.
+
+        Raises on Redis error — callers must wrap in try/except and log.
+        Silently swallowing this error leaves Redis state permanently stale,
+        diverging from the WAL/Walacor audit record.
+        """
         key = self._key(session_id)
-        try:
-            async with self._r.pipeline(transaction=True) as pipe:
-                pipe.hset(key, self._HASH_FIELD_SEQ, seq_num)
-                pipe.hset(key, self._HASH_FIELD_HASH, record_hash)
-                pipe.expire(key, self._ttl)
-                await pipe.execute()
-        except Exception:
-            logger.error(
-                "Redis session chain update failed: session_id=%s seq_num=%d",
-                session_id, seq_num, exc_info=True,
-            )
+        async with self._r.pipeline(transaction=True) as pipe:
+            pipe.hset(key, self._HASH_FIELD_SEQ, seq_num)
+            pipe.hset(key, self._HASH_FIELD_HASH, record_hash)
+            pipe.expire(key, self._ttl)
+            await pipe.execute()
 
     def active_session_count(self) -> int:
         return -1  # Redis doesn't cheaply count by prefix; return sentinel

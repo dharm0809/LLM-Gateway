@@ -33,6 +33,16 @@ htmlcov/
 *.db
 *.db-wal
 *.db-shm
+walacor-wal*/
+
+# --- Playwright MCP ---
+.playwright-mcp/
+
+# --- Excalidraw ---
+excalidraw.log
+
+# --- Claude Code ---
+.claude/
 
 # --- IDE ---
 .vscode/
@@ -43,3 +53,13 @@ htmlcov/
 # --- OS ---
 .DS_Store
 Thumbs.db
+
+# --- Test artifacts ---
+screenshots/
+
+# --- Playwright MCP temp screenshots (root-level PNGs from browser automation) ---
+/page-*.png
+
+# --- Logs / transcripts ---
+*.log
+*.jsonl

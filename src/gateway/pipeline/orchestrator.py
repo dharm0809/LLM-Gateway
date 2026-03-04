@@ -47,6 +47,26 @@ logger = logging.getLogger(__name__)
 
 _AUDIT_ONLY_ATTESTATION_ID = "audit_only_no_attestation"
 
+# ── Model Capability Registry ─────────────────────────────────────────────────
+# Caches per-model capabilities discovered at runtime so the gateway never
+# wastes a retry on a model that has already been probed.  Thread-safe for
+# asyncio (single writer, dict mutation is atomic in CPython).
+
+_model_capabilities: dict[str, dict[str, bool]] = {}
+# e.g.  {"gemma3:1b": {"supports_tools": False}, "qwen3:4b": {"supports_tools": True}}
+
+
+def _model_supports_tools(model_id: str) -> bool | None:
+    """Return True/False if known, None if not yet probed."""
+    return _model_capabilities.get(model_id, {}).get("supports_tools")
+
+
+def _record_model_capability(model_id: str, supports_tools: bool) -> None:
+    """Cache a discovered capability for a model."""
+    caps = _model_capabilities.setdefault(model_id, {})
+    caps["supports_tools"] = supports_tools
+    logger.info("Model capability cached: %s supports_tools=%s", model_id, supports_tools)
+
 
 # ── Basic helpers ─────────────────────────────────────────────────────────────
 
@@ -60,7 +80,7 @@ def _inc_request(provider: str, model: str, outcome: str) -> None:
     try:
         requests_total.labels(provider=provider, model=model, outcome=outcome).inc()
     except Exception:
-        pass
+        logger.debug("Metric increment failed (requests_total)", exc_info=True)
 
 
 async def _peek_model_id(request: Request) -> str:
@@ -71,19 +91,24 @@ async def _peek_model_id(request: Request) -> str:
     except (json.JSONDecodeError, AttributeError, UnicodeDecodeError):
         return ""
     except Exception:
-        logger.debug("_peek_model_id unexpected error", exc_info=True)
+        logger.warning("_peek_model_id unexpected error — model routing may use path fallback", exc_info=True)
         return ""
 
 
 def _make_adapter_for_route(route: dict) -> ProviderAdapter | None:
     """Build a provider adapter from a model routing table entry."""
+    settings = get_settings()
     provider = route.get("provider", "")
     url = route.get("url", "")
     key = route.get("key", "")
     if provider == "openai":
         return OpenAIAdapter(base_url=url, api_key=key)
     if provider == "ollama":
-        return OllamaAdapter(base_url=url, api_key=key)
+        return OllamaAdapter(
+            base_url=url, api_key=key,
+            digest_cache_ttl=settings.ollama_digest_cache_ttl,
+            thinking_strip_enabled=settings.thinking_strip_enabled,
+        )
     if provider == "anthropic":
         return AnthropicAdapter(base_url=url, api_key=key)
     if provider == "huggingface":
@@ -103,7 +128,12 @@ def _resolve_adapter(path: str, model_id: str = "") -> ProviderAdapter | None:
     # Path-based fallback (existing logic unchanged)
     if path.startswith("/v1/chat/completions") or path.startswith("/v1/completions"):
         if settings.provider_ollama_url and settings.gateway_provider == "ollama":
-            return OllamaAdapter(base_url=settings.provider_ollama_url, api_key=settings.provider_ollama_key)
+            return OllamaAdapter(
+                base_url=settings.provider_ollama_url,
+                api_key=settings.provider_ollama_key,
+                digest_cache_ttl=settings.ollama_digest_cache_ttl,
+                thinking_strip_enabled=settings.thinking_strip_enabled,
+            )
         return OpenAIAdapter(base_url=settings.provider_openai_url, api_key=settings.provider_openai_key)
     if path.startswith("/v1/messages"):
         return AnthropicAdapter(base_url=settings.provider_anthropic_url, api_key=settings.provider_anthropic_key)
@@ -115,6 +145,7 @@ def _resolve_adapter(path: str, model_id: str = "") -> ProviderAdapter | None:
             model_path=settings.generic_model_path,
             prompt_path=settings.generic_prompt_path,
             response_path=settings.generic_response_path,
+            auto_detect=settings.generic_auto_detect,
         )
     return None
 
@@ -142,7 +173,7 @@ async def _record_token_usage(
             token_usage_total.labels(tenant_id=tenant_id, provider=provider, token_type="completion").inc(completion_t)
             token_usage_total.labels(tenant_id=tenant_id, provider=provider, token_type="total").inc(total)
         except Exception:
-            pass
+            logger.debug("Metric increment failed (token_usage_total)", exc_info=True)
         if ctx.budget_tracker:
             await ctx.budget_tracker.record_usage(tenant_id, user, total, estimated)
     elif estimated > 0 and ctx.budget_tracker:
@@ -169,6 +200,7 @@ class _AuditParams:
     rp_version: int
     rp_result: str
     rp_decisions: list
+    provider: str = ""
 
 
 @dataclasses.dataclass
@@ -197,6 +229,7 @@ class _ToolStrategyResult:
     interactions: list[ToolInteraction]
     iterations: int
     error: Response | None
+    http_response: Response | None = None  # final HTTP response from tool loop (replaces original)
 
 
 # ── Phase 14: tool strategy helpers ──────────────────────────────────────────
@@ -208,6 +241,40 @@ def _select_tool_strategy(adapter: ProviderAdapter, settings) -> str:
     if settings.tool_strategy != "auto":
         return settings.tool_strategy
     return "passive" if adapter.get_provider_name() in ("openai", "anthropic") else "active"
+
+
+def _strip_tools_from_call(call: ModelCall) -> ModelCall:
+    """Remove tool definitions from request body — used when model rejects tools."""
+    try:
+        body = json.loads(call.raw_body)
+        body.pop("tools", None)
+        body.pop("tool_choice", None)
+        new_body = json.dumps(body).encode("utf-8")
+        return dataclasses.replace(call, raw_body=new_body)
+    except Exception:
+        return call
+
+
+_TOOL_UNSUPPORTED_PHRASES = (
+    "does not support tools",
+    "tool use is not supported",
+    "tools are not supported",
+    "tool_use is not supported",
+    "does not support function",
+    "function calling is not supported",
+    "does not support tool_use",
+)
+
+
+def _is_tool_unsupported_error(status_code: int, body: bytes | memoryview | None) -> bool:
+    """Check if a provider error indicates the model doesn't support tools."""
+    if status_code not in (400, 422) or body is None:
+        return False
+    try:
+        text = bytes(body).decode("utf-8", errors="replace").lower()
+        return any(phrase in text for phrase in _TOOL_UNSUPPORTED_PHRASES)
+    except Exception:
+        return False
 
 
 def _inject_tools_into_call(call: ModelCall, tool_definitions: list[dict]) -> ModelCall:
@@ -290,6 +357,7 @@ def _build_tool_event_record(
         "source": source,
     }
     if t.input_data is not None:
+        record["input_data"] = t.input_data
         record["input_hash"] = compute_sha3_512_string(json.dumps(t.input_data, default=str))
     if t.output_data is not None:
         record["output_hash"] = compute_sha3_512_string(json.dumps(t.output_data, default=str))
@@ -310,7 +378,7 @@ async def _write_tool_events(
     ctx: Any,
     settings: Any,
 ) -> None:
-    """Write each tool interaction as a first-class audit event record (Walacor ETId 9000003 or WAL)."""
+    """Write each tool interaction as a first-class audit event record (dual-write: Walacor + WAL)."""
     if not interactions:
         return
     session_id = call.metadata.get("session_id")
@@ -328,9 +396,10 @@ async def _write_tool_events(
             analysis = await analyze_text(output_text, ctx.content_analyzers)
             if analysis:
                 record["content_analysis"] = analysis
+        # Dual-write: Walacor backend AND local WAL (so lineage dashboard always has data)
         if ctx.walacor_client:
             await ctx.walacor_client.write_tool_event(record)
-        elif ctx.wal_writer:
+        if ctx.wal_writer:
             ctx.wal_writer.write_tool_event(record)
 
 
@@ -339,7 +408,7 @@ def _emit_tool_metrics(interactions: list[ToolInteraction], provider: str, sourc
         try:
             tool_calls_total.labels(provider=provider, tool_type=t.tool_type, source=source).inc()
         except Exception:
-            pass
+            logger.debug("Metric increment failed (tool_calls_total)", exc_info=True)
 
 
 async def _execute_one_tool(
@@ -374,7 +443,7 @@ async def _execute_one_tool(
     try:
         tool_calls_total.labels(provider=provider, tool_type=tc.tool_type, source="gateway").inc()
     except Exception:
-        pass
+        logger.debug("Metric increment failed (tool_calls_total gateway)", exc_info=True)
 
     # Analyse tool output BEFORE feeding back to the LLM (blocks indirect prompt injection)
     output_content = result.content
@@ -396,7 +465,7 @@ async def _execute_one_tool(
 
     enriched = ToolInteraction(
         tool_id=tc.tool_id, tool_type=tc.tool_type, tool_name=tc.tool_name,
-        input_data=tc.input_data, output_data=output_content, sources=None,
+        input_data=tc.input_data, output_data=output_content, sources=result.sources,
         metadata={"iteration": iteration, "duration_ms": duration_ms, "is_error": is_error},
     )
     return enriched, {"tool_call_id": tc.tool_id, "content": output_content}
@@ -410,15 +479,16 @@ async def _run_active_tool_loop(
     ctx,
     settings,
     provider: str,
-) -> tuple[ModelCall, ModelResponse, Response | None, list[ToolInteraction], int]:
+) -> tuple[ModelCall, ModelResponse, Response | None, list[ToolInteraction], int, Response | None]:
     """Gateway-side tool-call loop for local/private models (active strategy).
 
-    Returns (final_call, final_model_response, error_response_or_None, all_interactions, iterations).
+    Returns (final_call, final_model_response, error_response_or_None, all_interactions, iterations, final_http_response).
     """
     all_interactions: list[ToolInteraction] = []
     iterations = 0
     current_call = call
     current_model = model_response
+    final_http_resp: Response | None = None
 
     while (
         current_model.has_pending_tool_calls
@@ -441,25 +511,38 @@ async def _run_active_tool_loop(
             break
 
         http_resp, current_model = await forward(adapter, current_call, request)
+        final_http_resp = http_resp
         if http_resp.status_code >= 500:
-            return current_call, current_model, http_resp, all_interactions, iterations
+            return current_call, current_model, http_resp, all_interactions, iterations, None
 
     if iterations > 0:
         try:
             tool_loop_iterations.labels(provider=provider).observe(iterations)
         except Exception:
-            pass
+            logger.debug("Metric increment failed (tool_loop_iterations)", exc_info=True)
 
-    return current_call, current_model, None, all_interactions, iterations
+    return current_call, current_model, None, all_interactions, iterations, final_http_resp
 
 
 # ── Session chain + record write helpers ─────────────────────────────────────
 
 async def _apply_session_chain(record, session_id: str | None, ctx, settings) -> str | None:
-    """Compute and attach session chain fields to record. Returns record_hash or None."""
+    """Compute and attach session chain fields to record. Returns record_hash or None.
+
+    On Redis error, skips chain fields and returns None so the execution record
+    is still written without chain data — preferable to forging (0, GENESIS_HASH)
+    for an established session, which would silently corrupt the Merkle chain.
+    """
     if not (session_id and ctx.session_chain and settings.session_chain_enabled):
         return None
-    seq_num, prev_hash = await ctx.session_chain.next_chain_values(session_id)
+    try:
+        seq_num, prev_hash = await ctx.session_chain.next_chain_values(session_id)
+    except Exception:
+        logger.error(
+            "Session chain next_chain_values failed — skipping chain fields: session_id=%s",
+            session_id, exc_info=True,
+        )
+        return None
     record_hash_val = compute_record_hash(
         execution_id=record["execution_id"],
         policy_version=record["policy_version"],
@@ -475,17 +558,19 @@ async def _apply_session_chain(record, session_id: str | None, ctx, settings) ->
 
 
 async def _store_execution(record, request: Request, ctx) -> None:
-    """Write execution record to Walacor backend or WAL and tag request state."""
+    """Write execution record to Walacor backend and/or local WAL, then tag request state."""
     eid = record["execution_id"]
+    written = False
     if ctx.walacor_client:
         try:
             await ctx.walacor_client.write_execution(record)
+            written = True
         except Exception as exc:
             logger.error("Walacor write_execution FAILED — audit record may be lost: execution_id=%s error=%s", eid, exc)
-        execution_id_var.set(eid)
-        request.state.walacor_execution_id = eid
-    elif ctx.wal_writer:
+    if ctx.wal_writer:
         ctx.wal_writer.write_and_fsync(record)
+        written = True
+    if written:
         execution_id_var.set(eid)
         request.state.walacor_execution_id = eid
 
@@ -504,7 +589,7 @@ async def _eval_post_stream_policy(ctx, settings, model_response) -> tuple[int, 
     try:
         response_policy_total.labels(result=result).inc()
     except Exception:
-        pass
+        logger.debug("Metric increment failed (response_policy_total post-stream)", exc_info=True)
     return version, result, decisions
 
 
@@ -563,6 +648,7 @@ async def _after_stream_record(
                 "analyzer_decisions": rp_decisions,
                 "enforcement_mode": settings.enforcement_mode,
             },
+            model_id=call.model_id, provider=adapter.get_provider_name(),
         )
         _exec_id = record.get("execution_id", "unknown")
 
@@ -588,10 +674,10 @@ async def _skip_governance_after_stream(
     call: ModelCall,
     adapter: ProviderAdapter,
 ) -> None:
-    """In skip_governance mode: build execution record from stream buffer and write to Walacor (no hashing)."""
+    """In skip_governance mode: build execution record from stream buffer and write to Walacor/WAL."""
     ctx = get_pipeline_context()
     settings = get_settings()
-    if not ctx.walacor_client:
+    if not ctx.walacor_client and not ctx.wal_writer:
         return
     try:
         model_response = adapter.parse_streamed_response(buffer)
@@ -605,8 +691,12 @@ async def _skip_governance_after_stream(
             tenant_id=settings.gateway_tenant_id, gateway_id=settings.gateway_id,
             user=call.metadata.get("user"), session_id=call.metadata.get("session_id"),
             metadata={"enforcement_mode": "skip_governance"},
+            model_id=call.model_id, provider=adapter.get_provider_name(),
         )
-        await ctx.walacor_client.write_execution(record)
+        if ctx.walacor_client:
+            await ctx.walacor_client.write_execution(record)
+        if ctx.wal_writer:
+            ctx.wal_writer.write_and_fsync(record)
         execution_id_var.set(record["execution_id"])
     except Exception as e:
         logger.error("Skip-governance after-stream write failed: %s", e, exc_info=True)
@@ -620,13 +710,35 @@ async def _attestation_check(
 ) -> tuple[str, dict, bool, str | None, Response | None]:
     """Step 1. Returns (attestation_id, context, would_block, reason, error_resp)."""
     att_id = _AUDIT_ONLY_ATTESTATION_ID
-    att_ctx: dict = {"model_id": call.model_id, "verification_level": "audit_only", "tenant_id": settings.gateway_tenant_id}
+    att_ctx: dict = {"model_id": call.model_id, "provider": adapter.get_provider_name(), "status": "active", "verification_level": "audit_only", "tenant_id": settings.gateway_tenant_id}
 
     async def try_refresh() -> bool:
         return await ctx.sync_client.sync_attestations(provider=adapter.get_provider_name()) if ctx.sync_client else False
 
     attestation, err = await resolve_attestation(ctx.attestation_cache, adapter.get_provider_name(), call.model_id, try_refresh=try_refresh)
     if err is not None:
+        # Auto-attest when no control plane is configured (standalone governance mode).
+        # Skip auto-attestation when embedded control plane is active (control_store exists)
+        # — it manages attestations explicitly via CRUD API.
+        if ctx.sync_client is None and ctx.control_store is None:
+            from datetime import datetime, timezone
+            from gateway.cache.attestation_cache import CachedAttestation
+
+            auto_att = CachedAttestation(
+                attestation_id=f"self-attested:{call.model_id}",
+                model_id=call.model_id,
+                provider=adapter.get_provider_name(),
+                status="active",
+                fetched_at=datetime.now(timezone.utc),
+                ttl_seconds=settings.attestation_cache_ttl,
+                tenant_id=settings.gateway_tenant_id,
+                verification_level="self_attested",
+            )
+            ctx.attestation_cache.set(auto_att)
+            att_id = auto_att.attestation_id
+            att_ctx = {"model_id": call.model_id, "provider": adapter.get_provider_name(), "status": "active", "verification_level": "self_attested", "tenant_id": settings.gateway_tenant_id}
+            logger.info("Auto-attested model: provider=%s model=%s (no control plane)", adapter.get_provider_name(), call.model_id)
+            return att_id, att_ctx, False, None, None
         if is_audit_only:
             logger.warning("AUDIT_ONLY: Would have blocked (attestation) provider=%s model=%s", provider, model)
             return att_id, att_ctx, True, "attestation", None
@@ -637,6 +749,8 @@ async def _attestation_check(
     att_id = attestation.attestation_id
     att_ctx = {
         "model_id": call.model_id,
+        "provider": getattr(attestation, "provider", adapter.get_provider_name()),
+        "status": getattr(attestation, "status", "active"),
         "verification_level": getattr(attestation, "verification_level", "self_reported"),
         "tenant_id": attestation.tenant_id or settings.gateway_tenant_id,
     }
@@ -685,7 +799,16 @@ async def _budget_check(
     if not (ctx.budget_tracker and settings.token_budget_enabled):
         return None, 0, whb, reason, None
     estimated = max(len(call.prompt_text) // 4, 1)
-    allowed, remaining = await ctx.budget_tracker.check_and_reserve(settings.gateway_tenant_id, call.metadata.get("user"), estimated)
+    try:
+        allowed, remaining = await ctx.budget_tracker.check_and_reserve(
+            settings.gateway_tenant_id, call.metadata.get("user"), estimated
+        )
+    except Exception:
+        logger.error(
+            "Budget check_and_reserve failed: tenant_id=%s estimated=%d — failing open",
+            settings.gateway_tenant_id, estimated, exc_info=True,
+        )
+        return None, 0, whb, reason, None  # fail-open: allow request
     budget_rem: int | None = remaining if remaining >= 0 else None
     if not allowed:
         if is_audit_only:
@@ -696,7 +819,7 @@ async def _budget_check(
         try:
             budget_exceeded_total.labels(tenant_id=settings.gateway_tenant_id).inc()
         except Exception:
-            pass
+            logger.debug("Metric increment failed (budget_exceeded_total)", exc_info=True)
         return budget_rem, 0, whb, reason, JSONResponse({"error": "Token budget exhausted"}, status_code=429)
     return budget_rem, estimated, whb, reason, None
 
@@ -709,6 +832,7 @@ async def _run_pre_checks(
 ) -> _PreCheckResult:
     """Steps 1–2.7: attestation, policy, WAL backpressure, budget, tool inject."""
     if not ctx.attestation_cache:
+        _set_disposition(request, "error_config")
         _inc_request(provider, model, "error")
         return _PreCheckResult(error=JSONResponse({"error": "Attestation cache not configured"}, status_code=503))
 
@@ -719,6 +843,7 @@ async def _run_pre_checks(
         return _PreCheckResult(error=err)
 
     if not ctx.policy_cache:
+        _set_disposition(request, "error_config")
         _inc_request(provider, model, "error")
         return _PreCheckResult(error=JSONResponse({"error": "Policy cache not configured"}, status_code=503))
 
@@ -741,7 +866,12 @@ async def _run_pre_checks(
 
     tool_strategy = _select_tool_strategy(adapter, settings)
     if tool_strategy == "active" and ctx.tool_registry and ctx.tool_registry.get_tool_count() > 0:
-        call = _inject_tools_into_call(call, ctx.tool_registry.get_tool_definitions())
+        # Skip tool injection if we already know this model doesn't support tools
+        if _model_supports_tools(call.model_id) is False:
+            logger.debug("Skipping tool injection for %s — known to not support tools", call.model_id)
+            tool_strategy = "none"
+        else:
+            call = _inject_tools_into_call(call, ctx.tool_registry.get_tool_definitions())
 
     audit_metadata: dict = {}
     if is_audit_only:
@@ -766,7 +896,7 @@ async def _handle_skip_governance_non_streaming(
     ctx, settings, t0: float, provider: str, model: str,
 ) -> Response:
     response, model_response = await forward(adapter, call, request)
-    if ctx.walacor_client:
+    if ctx.walacor_client or ctx.wal_writer:
         if isinstance(adapter, OllamaAdapter) and call.model_id and ctx.http_client:
             mh = await adapter.fetch_model_hash(call.model_id, ctx.http_client)
             if mh:
@@ -777,13 +907,17 @@ async def _handle_skip_governance_non_streaming(
             tenant_id=settings.gateway_tenant_id, gateway_id=settings.gateway_id,
             user=call.metadata.get("user"), session_id=call.metadata.get("session_id"),
             metadata={"enforcement_mode": "skip_governance"},
+            model_id=call.model_id, provider=adapter.get_provider_name(),
         )
         try:
-            await ctx.walacor_client.write_execution(record)
+            if ctx.walacor_client:
+                await ctx.walacor_client.write_execution(record)
+            if ctx.wal_writer:
+                ctx.wal_writer.write_and_fsync(record)
             execution_id_var.set(record["execution_id"])
             request.state.walacor_execution_id = record["execution_id"]
         except Exception as exc:
-            logger.error("Walacor write_execution (skip_governance) failed execution_id=%s: %s", record["execution_id"], exc)
+            logger.error("Skip-governance write_execution failed execution_id=%s: %s", record["execution_id"], exc)
     pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
     _inc_request(provider, model, "allowed")
     return response
@@ -837,12 +971,13 @@ async def _route_tool_strategy(
             interactions=interactions, iterations=0, error=None,
         )
     if tool_strategy == "active" and ctx.tool_registry and model_response.has_pending_tool_calls:
-        call, model_response, loop_err, interactions, iters = await _run_active_tool_loop(
+        call, model_response, loop_err, interactions, iters, final_http = await _run_active_tool_loop(
             adapter, call, request, model_response, ctx, settings, provider
         )
         return _ToolStrategyResult(
             call=call, model_response=model_response,
             interactions=interactions, iterations=iters, error=loop_err,
+            http_response=final_http,
         )
     return _ToolStrategyResult(call=call, model_response=model_response, interactions=[], iterations=0, error=None)
 
@@ -868,7 +1003,7 @@ async def _run_response_policy(
     try:
         response_policy_total.labels(result=rp_result).inc()
     except Exception:
-        pass
+        logger.debug("Metric increment failed (response_policy_total)", exc_info=True)
 
     if resp_err is None:
         return rp_version, rp_result, decisions, whb, reason, None
@@ -914,12 +1049,41 @@ async def _build_and_write_record(
             "budget_remaining": params.budget_remaining,
             "enforcement_mode": settings.enforcement_mode,
         },
+        model_id=call.model_id, provider=params.provider,
     )
     record_hash_val = await _apply_session_chain(record, session_id, ctx, settings)
     await _store_execution(record, request, ctx)
     await _write_tool_events(params.tool_interactions, record["execution_id"], call, params.tool_strategy, ctx, settings)
     if session_id and ctx.session_chain and record_hash_val is not None:
-        await ctx.session_chain.update(session_id, record["sequence_number"], record_hash_val)
+        try:
+            await ctx.session_chain.update(session_id, record["sequence_number"], record_hash_val)
+        except Exception:
+            logger.error(
+                "Session chain update failed — chain state may be stale: session_id=%s seq_num=%d",
+                session_id, record["sequence_number"], exc_info=True,
+            )
+
+    # Phase 17: OTel GenAI span (fail-open; emitted after write so execution_id is set)
+    if ctx.tracer is not None:
+        try:
+            from gateway.telemetry.otel import emit_inference_span
+            usage = model_response.usage or {}
+            emit_inference_span(
+                tracer=ctx.tracer,
+                provider=call.provider,
+                model_id=call.model_id,
+                prompt_tokens=usage.get("prompt_tokens", 0) or 0,
+                completion_tokens=usage.get("completion_tokens", 0) or 0,
+                execution_id=record["execution_id"],
+                policy_result=params.policy_result,
+                tenant_id=settings.gateway_tenant_id,
+                session_id=session_id,
+                tool_count=len(params.tool_interactions),
+                has_thinking=model_response.thinking_content is not None,
+                provider_request_id=model_response.provider_request_id,
+            )
+        except Exception:
+            logger.debug("OTel emit_inference_span failed (fail-open)", exc_info=True)
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -932,6 +1096,7 @@ async def handle_request(request: Request) -> Response:
     is_audit_only = settings.enforcement_mode == "audit_only"
 
     if request.method != "POST":
+        _set_disposition(request, "error_method_not_allowed")
         _inc_request("unknown", "unknown", "error")
         return JSONResponse({"error": "Method not allowed"}, status_code=405)
 
@@ -1000,10 +1165,22 @@ async def handle_request(request: Request) -> Response:
             )
             logger.debug("Active tool strategy: overriding stream=False for %s/%s", provider, model)
         except Exception:
-            pass  # if body parse fails, proceed — non-streaming flag still set
+            logger.warning(
+                "Active tool strategy: failed to override stream=False for %s/%s — "
+                "tool loop will be skipped; proceeding on streaming path",
+                provider, model, exc_info=True,
+            )
 
     # ── Step 3: Forward ───────────────────────────────────────────────────────
     if call.is_streaming:
+        # For streaming, we do a quick non-streaming probe only if tools were
+        # injected and the model might not support them.  Actually, the easier
+        # path: strip tools from streaming requests and let the stream proceed;
+        # tool-loop already forces non-streaming for active strategy.  If we
+        # reach here with is_streaming=True and tools injected, it means the
+        # active strategy override failed — just strip tools to be safe.
+        if pre.tool_strategy == "active":
+            call = _strip_tools_from_call(call)
         _set_disposition(request, "allowed")
         buf: list[bytes] = []
         task = BackgroundTask(
@@ -1018,11 +1195,37 @@ async def handle_request(request: Request) -> Response:
         return resp
 
     http_response, model_response = await forward(adapter, call, request)
+
+    # ── Tool-unsupported retry: if the model rejects tools, strip and retry ──
+    if _is_tool_unsupported_error(http_response.status_code, bytes(http_response.body)):
+        _record_model_capability(call.model_id, supports_tools=False)
+        logger.info(
+            "Model %s does not support tools — retrying without tool definitions",
+            call.model_id,
+        )
+        call = _strip_tools_from_call(call)
+        pre = dataclasses.replace(pre, tool_strategy="none")
+        http_response, model_response = await forward(adapter, call, request)
+    elif pre.tool_strategy == "active" and http_response.status_code < 400:
+        # Model accepted tools successfully — cache this
+        _record_model_capability(call.model_id, supports_tools=True)
+
     model_response = await _maybe_fetch_ollama_hash(adapter, call, model_response, ctx)
 
     if http_response.status_code >= 500:
         _set_disposition(request, "error_provider")
         _inc_request(provider, model, "error")
+        await _record_token_usage(
+            model_response, settings.gateway_tenant_id, provider,
+            call.metadata.get("user"), estimated=pre.budget_estimated,
+        )
+        await _build_and_write_record(request, call, model_response, _AuditParams(
+            attestation_id=pre.att_id,
+            policy_version=pre.pv, policy_result=pre.pr,
+            budget_remaining=pre.budget_remaining, audit_metadata=pre.audit_metadata,
+            tool_interactions=[], tool_strategy=pre.tool_strategy, tool_iterations=0,
+            rp_version=0, rp_result="skipped", rp_decisions=[], provider=provider,
+        ), ctx, settings)
         pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
         return http_response
 
@@ -1033,16 +1236,44 @@ async def handle_request(request: Request) -> Response:
     if tool_result.error is not None:
         _set_disposition(request, "error_provider")
         _inc_request(provider, model, "error")
+        await _record_token_usage(
+            tool_result.model_response, settings.gateway_tenant_id, provider,
+            call.metadata.get("user"), estimated=pre.budget_estimated,
+        )
+        await _build_and_write_record(request, tool_result.call, tool_result.model_response, _AuditParams(
+            attestation_id=pre.att_id,
+            policy_version=pre.pv, policy_result=pre.pr,
+            budget_remaining=pre.budget_remaining, audit_metadata=pre.audit_metadata,
+            tool_interactions=tool_result.interactions, tool_strategy=pre.tool_strategy,
+            tool_iterations=tool_result.iterations,
+            rp_version=0, rp_result="skipped", rp_decisions=[], provider=provider,
+        ), ctx, settings)
         pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
         return tool_result.error
 
     call, model_response = tool_result.call, tool_result.model_response
+    # If the active tool loop ran and produced a final HTTP response, use it instead of the
+    # original http_response (which still has finish_reason=tool_calls from the first forward).
+    if tool_result.http_response is not None:
+        http_response = tool_result.http_response
 
     # ── Step 4: Post-inference policy (G4) ───────────────────────────────────
     rp_version, rp_result, rp_decisions, whb, _, resp_err = await _run_response_policy(
         request, ctx, settings, is_audit_only, model_response, pre.audit_metadata, provider, model, t0
     )
     if resp_err is not None:
+        await _record_token_usage(
+            model_response, settings.gateway_tenant_id, provider,
+            call.metadata.get("user"), estimated=pre.budget_estimated,
+        )
+        await _build_and_write_record(request, call, model_response, _AuditParams(
+            attestation_id=pre.att_id,
+            policy_version=pre.pv, policy_result=pre.pr,
+            budget_remaining=pre.budget_remaining, audit_metadata=pre.audit_metadata,
+            tool_interactions=tool_result.interactions, tool_strategy=pre.tool_strategy,
+            tool_iterations=tool_result.iterations,
+            rp_version=rp_version, rp_result=rp_result, rp_decisions=rp_decisions, provider=provider,
+        ), ctx, settings)
         return resp_err
 
     # ── Step 5: Token usage ───────────────────────────────────────────────────
@@ -1058,7 +1289,7 @@ async def handle_request(request: Request) -> Response:
         budget_remaining=pre.budget_remaining, audit_metadata=pre.audit_metadata,
         tool_interactions=tool_result.interactions, tool_strategy=pre.tool_strategy,
         tool_iterations=tool_result.iterations,
-        rp_version=rp_version, rp_result=rp_result, rp_decisions=rp_decisions,
+        rp_version=rp_version, rp_result=rp_result, rp_decisions=rp_decisions, provider=provider,
     )
     await _build_and_write_record(request, call, model_response, audit_params, ctx, settings)
 

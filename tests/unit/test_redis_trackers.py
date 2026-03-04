@@ -37,6 +37,13 @@ def _mock_redis():
     return client, pipe
 
 
+def _mock_budget_redis():
+    """Build a Redis mock for budget tracker tests (eval-based)."""
+    client = MagicMock()
+    client.eval = AsyncMock(return_value=[1, 900])
+    return client
+
+
 # ---------------------------------------------------------------------------
 # RedisSessionChainTracker
 # ---------------------------------------------------------------------------
@@ -45,7 +52,6 @@ def _mock_redis():
 async def test_redis_session_next_chain_values_first_call_returns_genesis():
     client, pipe = _mock_redis()
     # First call: no existing seq or hash (HGET returns None for both)
-    # New implementation: HGET seq, HGET hash, EXPIRE
     pipe.execute = AsyncMock(return_value=[None, None, True])
 
     tracker = RedisSessionChainTracker(client, ttl=3600)
@@ -110,8 +116,7 @@ def test_redis_session_key_format():
 
 @pytest.mark.anyio
 async def test_redis_budget_check_and_reserve_calls_eval_with_correct_args():
-    client = MagicMock()
-    client.eval = AsyncMock(return_value=[1, 900])
+    client = _mock_budget_redis()
 
     tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
     allowed, remaining = await tracker.check_and_reserve("tenant-1", None, 100)
@@ -140,60 +145,137 @@ async def test_redis_budget_check_and_reserve_blocked():
     assert remaining == 50
 
 
-def _mock_budget_redis_pipeline():
-    """Build a Redis mock that supports .pipeline() for the refactored record_usage."""
+@pytest.mark.anyio
+async def test_redis_budget_check_and_reserve_redis_error_fails_open():
+    """On Redis failure, check_and_reserve fails open (allows request) and logs the error."""
     client = MagicMock()
-    pipe = AsyncMock()
-    pipe.__aenter__ = AsyncMock(return_value=pipe)
-    pipe.__aexit__ = AsyncMock(return_value=False)
-    pipe.execute = AsyncMock(return_value=[1, True])
-    client.pipeline = MagicMock(return_value=pipe)
-    client.eval = AsyncMock(return_value=[1, 900])
-    return client, pipe
+    client.eval = AsyncMock(side_effect=Exception("Redis down"))
+
+    tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
+    allowed, remaining = await tracker.check_and_reserve("tenant-1", None, 100)
+
+    assert allowed is True    # fail-open
+    assert remaining == -1   # unlimited sentinel
+    # Reservation key must be cleaned up after the failed eval
+    assert ("tenant-1", "") not in tracker._reservation_keys
 
 
 @pytest.mark.anyio
 async def test_redis_budget_record_usage_applies_positive_delta():
-    """record_usage with actual > estimated applies INCRBY delta via pipeline (Finding 4 fix)."""
-    client, pipe = _mock_budget_redis_pipeline()
+    """record_usage with actual > estimated applies delta via Lua eval (floor-clamped)."""
+    client = _mock_budget_redis()
 
     tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
     # Seed the reservation key so record_usage uses it
     await tracker.check_and_reserve("tenant-1", None, 80)
     await tracker.record_usage("tenant-1", None, 120, estimated=80)
 
-    # delta = 120 - 80 = 40 → pipe.incrby(key, 40)
-    pipe.incrby.assert_called_once()
-    assert pipe.incrby.call_args.args[1] == 40
-    pipe.execute.assert_awaited()
+    # delta = 120 - 80 = 40 → eval called twice (check_and_reserve + record_usage)
+    assert client.eval.await_count == 2
+    last_call = client.eval.call_args_list[1]
+    assert last_call.args[3] == "40"   # delta argument
 
 
 @pytest.mark.anyio
 async def test_redis_budget_record_usage_applies_negative_delta():
-    """record_usage with actual < estimated applies DECRBY to refund over-reservation."""
-    client, pipe = _mock_budget_redis_pipeline()
+    """record_usage with actual < estimated applies negative delta (refund) via Lua eval."""
+    client = _mock_budget_redis()
 
     tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
     await tracker.check_and_reserve("tenant-1", None, 100)
     await tracker.record_usage("tenant-1", None, 60, estimated=100)
 
-    # delta = 60 - 100 = -40 → pipe.decrby(key, 40)
-    pipe.decrby.assert_called_once()
-    assert pipe.decrby.call_args.args[1] == 40
-    pipe.execute.assert_awaited()
+    # delta = 60 - 100 = -40 → eval called with delta="-40"
+    assert client.eval.await_count == 2
+    last_call = client.eval.call_args_list[1]
+    assert last_call.args[3] == "-40"  # negative delta = refund
 
 
 @pytest.mark.anyio
 async def test_redis_budget_record_usage_zero_delta_is_noop():
-    """record_usage when actual == estimated makes no Redis pipeline calls."""
-    client, pipe = _mock_budget_redis_pipeline()
+    """record_usage when actual == estimated makes no Redis eval calls."""
+    client = _mock_budget_redis()
 
     tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
     await tracker.record_usage("tenant-1", None, 100, estimated=100)
 
-    pipe.incrby.assert_not_called()
-    pipe.decrby.assert_not_called()
-    pipe.execute.assert_not_awaited()
+    # Zero delta: record_usage returns early — eval not called at all
+    client.eval.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_redis_budget_record_usage_uses_reservation_key():
+    """record_usage uses the key stored by check_and_reserve to avoid period-boundary mismatch."""
+    client = _mock_budget_redis()
+
+    tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
+
+    # Reserve tokens — stores the period key in FIFO queue
+    await tracker.check_and_reserve("t1", None, 100)
+
+    # Confirm the reservation key was stored (FIFO list with one entry)
+    assert ("t1", "") in tracker._reservation_keys
+    assert len(tracker._reservation_keys[("t1", "")]) == 1
+
+    # Call record_usage — should pop the stored key (delta = 20)
+    await tracker.record_usage("t1", None, 120, estimated=100)
+
+    # Key should be consumed (list entry removed; dict key deleted when empty)
+    assert ("t1", "") not in tracker._reservation_keys
+    # Both check_and_reserve and record_usage called eval
+    assert client.eval.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_redis_budget_reservation_keys_fifo_order():
+    """Concurrent check_and_reserve calls for same tenant use FIFO ordering in record_usage."""
+    client = _mock_budget_redis()
+    tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
+
+    # Two successive reservations for the same tenant
+    await tracker.check_and_reserve("t1", None, 100)
+    await tracker.check_and_reserve("t1", None, 200)
+
+    queue = tracker._reservation_keys[("t1", "")]
+    assert len(queue) == 2
+    second_key = queue[1][0]
+
+    # FIFO: first record_usage consumes the first reservation slot
+    await tracker.record_usage("t1", None, 110, estimated=100)
+    assert len(tracker._reservation_keys[("t1", "")]) == 1
+    # Remaining slot is the second reservation's key
+    assert tracker._reservation_keys[("t1", "")][0][0] == second_key
+
+    # Second record_usage consumes the second slot
+    await tracker.record_usage("t1", None, 210, estimated=200)
+    assert ("t1", "") not in tracker._reservation_keys
+
+
+@pytest.mark.anyio
+async def test_redis_budget_record_usage_no_prior_reserve_uses_period_key():
+    """record_usage without prior check_and_reserve falls back to computing a fresh period key."""
+    client = _mock_budget_redis()
+    tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
+
+    # No check_and_reserve call — record_usage must use fallback period key
+    await tracker.record_usage("t1", None, 50, estimated=0)
+
+    client.eval.assert_awaited_once()
+    call_args = client.eval.call_args
+    # Key must follow the standard budget key format
+    assert call_args.args[2].startswith("gateway:budget:t1::")
+    assert call_args.args[3] == "50"  # delta
+
+
+@pytest.mark.anyio
+async def test_redis_budget_record_usage_redis_error_does_not_raise():
+    """On Redis eval failure, record_usage logs and does not propagate the error."""
+    client = MagicMock()
+    client.eval = AsyncMock(side_effect=Exception("Redis down"))
+
+    tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
+    # Should not raise (delta = 120 - 100 = 20, so eval is attempted)
+    await tracker.record_usage("t1", None, 120, estimated=100)
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +331,54 @@ async def test_in_memory_session_chain_async_interface():
     seq2, prev2 = await tracker.next_chain_values("s1")
     assert seq2 == 1
     assert prev2 == "hash-abc"
+
+
+@pytest.mark.anyio
+async def test_in_memory_session_chain_eviction_by_max_sessions():
+    """_evict_locked removes the least-recently-active session when count exceeds max_sessions."""
+    tracker = SessionChainTracker(max_sessions=2, ttl_seconds=3600)
+
+    # Add two sessions (within limit)
+    await tracker.update("s1", 0, "hash-s1")
+    await tracker.update("s2", 0, "hash-s2")
+    assert tracker.active_session_count() == 2
+
+    # Third session triggers eviction: s1 is oldest → evicted
+    await tracker.update("s3", 0, "hash-s3")
+    assert tracker.active_session_count() == 2
+
+    # s1 was evicted: next_chain_values returns genesis (new session)
+    seq, prev = await tracker.next_chain_values("s1")
+    assert seq == 0
+    assert prev == GENESIS_HASH
+
+    # s2 and s3 are still tracked
+    seq2, _ = await tracker.next_chain_values("s2")
+    assert seq2 == 1  # continues from stored state
+
+
+@pytest.mark.anyio
+async def test_in_memory_session_chain_ttl_eviction():
+    """Sessions inactive beyond TTL are purged before LRU eviction runs."""
+    from datetime import datetime, timezone, timedelta
+
+    tracker = SessionChainTracker(max_sessions=1, ttl_seconds=60)
+
+    await tracker.update("old", 0, "hash-old")
+    assert tracker.active_session_count() == 1
+
+    # Manually age the session past the TTL
+    async with tracker._lock:
+        tracker._sessions["old"].last_activity = (
+            datetime.now(timezone.utc) - timedelta(seconds=120)
+        )
+
+    # Adding a new session with max_sessions=1 triggers eviction
+    await tracker.update("new", 0, "hash-new")
+
+    # TTL eviction removed "old" before LRU; only "new" remains
+    assert tracker.active_session_count() == 1
+    assert "old" not in tracker._sessions
 
 
 # ---------------------------------------------------------------------------
@@ -329,31 +459,30 @@ async def test_in_memory_budget_tracker_no_budget_configured_always_allows():
 
 
 # ---------------------------------------------------------------------------
-# Redis error resilience (new error handling)
+# Redis error resilience (updated: next_chain_values and update now raise)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.anyio
-async def test_redis_session_next_chain_values_redis_error_returns_fallback():
-    """On Redis failure, next_chain_values returns (0, GENESIS_HASH) so the request proceeds."""
+async def test_redis_session_next_chain_values_redis_error_raises():
+    """On Redis failure, next_chain_values raises so _apply_session_chain can skip chain
+    fields rather than forging (0, GENESIS_HASH) for an established session."""
     client, pipe = _mock_redis()
     pipe.execute = AsyncMock(side_effect=Exception("Redis connection refused"))
 
     tracker = RedisSessionChainTracker(client, ttl=3600)
-    seq, prev = await tracker.next_chain_values("sess-err")
-
-    assert seq == 0
-    assert prev == GENESIS_HASH
+    with pytest.raises(Exception, match="Redis connection refused"):
+        await tracker.next_chain_values("sess-err")
 
 
 @pytest.mark.anyio
-async def test_redis_session_update_redis_error_does_not_raise():
-    """On Redis failure, update() logs and swallows the error (chain breaks but request succeeds)."""
+async def test_redis_session_update_redis_error_raises():
+    """On Redis failure, update() raises so the caller can log the chain divergence."""
     client, pipe = _mock_redis()
     pipe.execute = AsyncMock(side_effect=Exception("Redis timeout"))
 
     tracker = RedisSessionChainTracker(client, ttl=3600)
-    # Should not raise
-    await tracker.update("sess-err", 1, "hash123")
+    with pytest.raises(Exception, match="Redis timeout"):
+        await tracker.update("sess-err", 1, "hash123")
 
 
 @pytest.mark.anyio
@@ -371,43 +500,131 @@ async def test_redis_session_next_chain_values_str_hash_decoded_correctly():
     assert prev == stored_hash
 
 
-@pytest.mark.anyio
-async def test_redis_budget_record_usage_uses_reservation_key():
-    """record_usage uses the key stored by check_and_reserve to avoid period-boundary mismatch."""
-    client = MagicMock()
-    client.eval = AsyncMock(return_value=[1, 900])
-    pipe = AsyncMock()
-    pipe.__aenter__ = AsyncMock(return_value=pipe)
-    pipe.__aexit__ = AsyncMock(return_value=False)
-    pipe.execute = AsyncMock(return_value=[1, True])
-    client.pipeline = MagicMock(return_value=pipe)
+# ---------------------------------------------------------------------------
+# Redis budget period key — December → January rollover
+# ---------------------------------------------------------------------------
 
+def test_redis_budget_period_key_december_rollover():
+    """December → January rollover computes a valid key (no month=13 bug)."""
+    from unittest.mock import patch
+    from datetime import datetime, timezone
+
+    client = _mock_budget_redis()
     tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
 
-    # Reserve tokens — this stores the period key internally
-    await tracker.check_and_reserve("t1", None, 100)
+    dec_31 = datetime(2024, 12, 31, 23, 59, 0, tzinfo=timezone.utc)
+    with patch("gateway.pipeline.budget_tracker.datetime") as mock_dt:
+        mock_dt.now.return_value = dec_31
+        key, ttl = tracker._period_key("t1", None)
 
-    # Confirm the reservation key was stored
-    assert ("t1", "") in tracker._reservation_keys
+    # Key must contain "202412" (December), not an invalid period
+    assert "202412" in key
+    assert key.startswith("gateway:budget:t1::")
+    # TTL must be positive (≥ 60 seconds remaining in December + 3600 buffer)
+    assert ttl > 3600
 
-    # Call record_usage — should pop the stored key
-    await tracker.record_usage("t1", None, 120, estimated=100)
 
-    # Key should be consumed
-    assert ("t1", "") not in tracker._reservation_keys
-    pipe.execute.assert_awaited_once()
+# ---------------------------------------------------------------------------
+# Orchestrator: _record_token_usage streaming refund branch
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_record_token_usage_zero_usage_refunds_reservation():
+    """When usage=0 (streaming with no usage field) but estimated>0, budget refund is called."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from gateway.pipeline.orchestrator import _record_token_usage
+
+    mock_tracker = AsyncMock()
+    mock_ctx = MagicMock()
+    mock_ctx.budget_tracker = mock_tracker
+
+    # ModelResponse with empty usage (simulates streaming provider with no usage field)
+    mock_response = MagicMock()
+    mock_response.usage = {}
+
+    with patch("gateway.pipeline.orchestrator.get_pipeline_context", return_value=mock_ctx):
+        total = await _record_token_usage(
+            mock_response, "tenant-1", "openai", None, estimated=100
+        )
+
+    assert total == 0
+    # Refund: actual=0, estimated=100 → record_usage(tenant_id, user, 0, estimated=100)
+    mock_tracker.record_usage.assert_awaited_once_with("tenant-1", None, 0, 100)
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator: session chain seq/hash round-trip (T4)
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_redis_budget_record_usage_redis_error_does_not_raise():
-    """On Redis pipeline failure, record_usage logs and does not propagate the error."""
-    client = MagicMock()
-    pipe = AsyncMock()
-    pipe.__aenter__ = AsyncMock(return_value=pipe)
-    pipe.__aexit__ = AsyncMock(return_value=False)
-    pipe.execute = AsyncMock(side_effect=Exception("Redis down"))
-    client.pipeline = MagicMock(return_value=pipe)
+async def test_build_and_write_record_session_chain_update_matches_embedded_values():
+    """session_chain.update receives the exact seq_num and record_hash that _apply_session_chain
+    embedded in the audit record — verifying the round-trip in _build_and_write_record."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from gateway.pipeline.orchestrator import _build_and_write_record, _AuditParams
 
-    tracker = RedisBudgetTracker(client, period="monthly", max_tokens=1000)
-    # Should not raise
-    await tracker.record_usage("t1", None, 120, estimated=100)
+    # Session chain mock: returns seq=7 and a known previous hash
+    mock_chain = MagicMock()
+    mock_chain.next_chain_values = AsyncMock(return_value=(7, "prev-hash-xyz"))
+    mock_chain.update = AsyncMock()
+
+    ctx = MagicMock()
+    ctx.session_chain = mock_chain
+    ctx.walacor_client = None
+    ctx.wal_writer = None
+    ctx.tool_registry = None
+
+    settings = MagicMock()
+    settings.session_chain_enabled = True
+    settings.gateway_tenant_id = "test-tenant"
+    settings.gateway_id = "gw-1"
+    settings.enforcement_mode = "enforce"
+
+    call = MagicMock()
+    call.metadata = {"session_id": "sess-abc", "user": None, "prompt_id": None}
+
+    model_response = MagicMock()
+    model_response.completion = "hi"
+    model_response.usage = {}
+    model_response.tool_interactions = []
+
+    params = _AuditParams(
+        attestation_id="att-1",
+        policy_version=1,
+        policy_result="pass",
+        budget_remaining=None,
+        audit_metadata={},
+        tool_interactions=[],
+        tool_strategy="passive",
+        tool_iterations=0,
+        rp_version=0,
+        rp_result="pass",
+        rp_decisions=[],
+    )
+
+    record = {
+        "execution_id": "exec-123",
+        "policy_version": 1,
+        "policy_result": "pass",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+    }
+
+    mock_request = MagicMock()
+
+    with patch("gateway.pipeline.orchestrator._store_execution", new=AsyncMock()), \
+         patch("gateway.pipeline.orchestrator._write_tool_events", new=AsyncMock()), \
+         patch("gateway.pipeline.orchestrator.build_execution_record", return_value=record):
+        await _build_and_write_record(mock_request, call, model_response, params, ctx, settings)
+
+    # Verify the embedded chain fields are consistent
+    assert record["sequence_number"] == 7
+    assert record["previous_record_hash"] == "prev-hash-xyz"
+    assert "record_hash" in record
+
+    # session_chain.update must be called with the same values that were embedded
+    mock_chain.update.assert_awaited_once_with(
+        "sess-abc",
+        record["sequence_number"],
+        record["record_hash"],
+    )
