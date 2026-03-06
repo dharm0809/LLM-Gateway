@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Walacor Gateway — Architecture & Workflow</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0a0e17;
+    color: #e0e6ed;
+    padding: 40px 60px;
+    line-height: 1.6;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+  .subtitle {
+    font-size: 15px;
+    color: #7a8ba5;
+    margin-bottom: 48px;
+  }
+  h2 {
+    font-size: 20px;
+    font-weight: 600;
+    color: #c9a227;
+    margin-bottom: 24px;
+    margin-top: 56px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #1e2a3a;
+  }
+  h2:first-of-type { margin-top: 0; }
+
+  /* ── High-level architecture diagram ── */
+  .arch-diagram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 32px 0 48px;
+    flex-wrap: wrap;
+  }
+  .arch-box {
+    border: 2px solid #2a3a52;
+    border-radius: 12px;
+    padding: 20px 28px;
+    text-align: center;
+    min-width: 160px;
+    background: #111827;
+    position: relative;
+  }
+  .arch-box.client {
+    border-color: #3b82f6;
+    background: linear-gradient(135deg, #111827, #172033);
+  }
+  .arch-box.gateway {
+    border-color: #c9a227;
+    background: linear-gradient(135deg, #1a1810, #1e1f14);
+    min-width: 420px;
+    padding: 28px 36px;
+  }
+  .arch-box.provider {
+    border-color: #10b981;
+    background: linear-gradient(135deg, #111827, #0f2018);
+  }
+  .arch-box .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #7a8ba5;
+    margin-bottom: 6px;
+  }
+  .arch-box .name {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .arch-box.gateway .name { color: #c9a227; }
+  .arch-box .detail {
+    font-size: 12px;
+    color: #7a8ba5;
+    margin-top: 8px;
+  }
+  .arch-arrow {
+    font-size: 28px;
+    color: #3a4a62;
+    padding: 0 16px;
+    font-weight: 300;
+  }
+  .arch-stores {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    margin-top: 16px;
+  }
+  .store-tag {
+    font-size: 11px;
+    background: #1e2a3a;
+    border: 1px solid #2a3a52;
+    border-radius: 6px;
+    padding: 4px 12px;
+    color: #7a8ba5;
+  }
+
+  /* ── Pipeline steps ── */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 32px 0;
+    position: relative;
+  }
+  .pipeline::before {
+    content: '';
+    position: absolute;
+    left: 23px;
+    top: 24px;
+    bottom: 24px;
+    width: 2px;
+    background: linear-gradient(to bottom, #c9a227, #3b82f6, #10b981, #c9a227);
+    border-radius: 1px;
+  }
+  .step {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+    padding: 14px 0;
+    position: relative;
+  }
+  .step-num {
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 16px;
+    z-index: 1;
+  }
+  .step-num.auth { background: #1e2a3a; border: 2px solid #3b82f6; color: #3b82f6; }
+  .step-num.check { background: #1e1f14; border: 2px solid #c9a227; color: #c9a227; }
+  .step-num.forward { background: #0f2018; border: 2px solid #10b981; color: #10b981; }
+  .step-num.tool { background: #1e1422; border: 2px solid #a855f7; color: #a855f7; }
+  .step-num.analyze { background: #1e1418; border: 2px solid #ef4444; color: #ef4444; }
+  .step-num.write { background: #1e2a3a; border: 2px solid #06b6d4; color: #06b6d4; }
+  .step-body {
+    flex: 1;
+    padding-top: 4px;
+  }
+  .step-title {
+    font-weight: 600;
+    font-size: 15px;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+  .step-desc {
+    font-size: 13px;
+    color: #7a8ba5;
+  }
+  .step-file {
+    font-size: 11px;
+    color: #4a5a72;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    margin-top: 4px;
+  }
+  .step-outcomes {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .outcome {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+  .outcome.block { background: #2d1215; color: #ef4444; border: 1px solid #5c2023; }
+  .outcome.warn { background: #2d2a12; color: #eab308; border: 1px solid #5c5423; }
+  .outcome.pass { background: #0f2018; color: #10b981; border: 1px solid #1a4a32; }
+
+  /* ── Tool loop diagram ── */
+  .tool-loop {
+    background: #111827;
+    border: 1px solid #2a3a52;
+    border-radius: 12px;
+    padding: 32px;
+    margin: 32px 0;
+  }
+  .loop-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: wrap;
+    margin: 20px 0;
+  }
+  .loop-box {
+    border: 1px solid #2a3a52;
+    border-radius: 8px;
+    padding: 14px 18px;
+    text-align: center;
+    min-width: 130px;
+    background: #0a0e17;
+  }
+  .loop-box .lbl {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #7a8ba5;
+    margin-bottom: 4px;
+  }
+  .loop-box .val {
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .loop-box.model { border-color: #10b981; }
+  .loop-box.model .val { color: #10b981; }
+  .loop-box.gw { border-color: #c9a227; }
+  .loop-box.gw .val { color: #c9a227; }
+  .loop-box.ext { border-color: #a855f7; }
+  .loop-box.ext .val { color: #a855f7; }
+  .loop-arrow {
+    font-size: 22px;
+    color: #3a4a62;
+    padding: 0 10px;
+  }
+  .loop-label {
+    font-size: 11px;
+    color: #7a8ba5;
+    text-align: center;
+    margin-top: -2px;
+  }
+  .loop-return {
+    text-align: center;
+    margin-top: 16px;
+    padding: 8px;
+    border: 1px dashed #2a3a52;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #7a8ba5;
+  }
+  .loop-return span { color: #c9a227; font-weight: 600; }
+
+  /* ── What we are / not ── */
+  .comparison {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin: 24px 0;
+  }
+  .comp-card {
+    border: 1px solid #2a3a52;
+    border-radius: 12px;
+    padding: 24px;
+    background: #111827;
+  }
+  .comp-card.is { border-color: #10b981; }
+  .comp-card.not { border-color: #ef4444; }
+  .comp-card h3 {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 16px;
+  }
+  .comp-card.is h3 { color: #10b981; }
+  .comp-card.not h3 { color: #ef4444; }
+  .comp-card ul {
+    list-style: none;
+    font-size: 14px;
+  }
+  .comp-card ul li {
+    padding: 6px 0;
+    padding-left: 20px;
+    position: relative;
+    color: #c0c8d4;
+  }
+  .comp-card.is ul li::before { content: '\2713'; position: absolute; left: 0; color: #10b981; font-weight: 700; }
+  .comp-card.not ul li::before { content: '\2717'; position: absolute; left: 0; color: #ef4444; font-weight: 700; }
+
+  /* ── Analogy table ── */
+  .analogy-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0;
+    font-size: 14px;
+  }
+  .analogy-table th {
+    text-align: left;
+    padding: 12px 16px;
+    background: #1e2a3a;
+    color: #c9a227;
+    font-weight: 600;
+    border-bottom: 2px solid #2a3a52;
+  }
+  .analogy-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid #1e2a3a;
+    color: #c0c8d4;
+  }
+  .analogy-table tr:hover td { background: #111827; }
+
+  /* ── Audit record ── */
+  .record-card {
+    background: #111827;
+    border: 1px solid #2a3a52;
+    border-radius: 12px;
+    padding: 24px;
+    margin: 24px 0;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+  .record-card .key { color: #c9a227; }
+  .record-card .str { color: #10b981; }
+  .record-card .num { color: #3b82f6; }
+  .record-card .comment { color: #4a5a72; }
+
+  /* ── Compliance badges ── */
+  .compliance-row {
+    display: flex;
+    gap: 16px;
+    margin: 24px 0;
+    flex-wrap: wrap;
+  }
+  .compliance-badge {
+    border: 1px solid #2a3a52;
+    border-radius: 10px;
+    padding: 16px 24px;
+    background: #111827;
+    text-align: center;
+    min-width: 150px;
+  }
+  .compliance-badge .framework {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #7a8ba5;
+    margin-bottom: 4px;
+  }
+  .compliance-badge .name {
+    font-size: 16px;
+    font-weight: 700;
+    color: #c9a227;
+  }
+
+  /* ── Page break hint for printing ── */
+  .page-break { page-break-before: always; margin-top: 48px; }
+
+  @media print {
+    body { background: #fff; color: #222; padding: 20px; }
+    .arch-box, .comp-card, .record-card, .tool-loop, .compliance-badge {
+      background: #f8f9fa; border-color: #ddd;
+    }
+    .step-num { border-width: 2px; }
+    h2 { color: #8a7210; border-bottom-color: #ddd; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Walacor Gateway</h1>
+<p class="subtitle">AI Security & Governance Proxy — Architecture & Workflow</p>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>What It Is</h2>
+
+<div class="comparison">
+  <div class="comp-card is">
+    <h3>What we are</h3>
+    <ul>
+      <li>Security & compliance proxy for LLM traffic</li>
+      <li>Like a WAF (Web Application Firewall) for AI</li>
+      <li>Transparent — apps don't change their code</li>
+      <li>Cryptographic audit trail (SHA3-512 Merkle chain)</li>
+      <li>Content safety scanner (PII, toxicity, Llama Guard)</li>
+      <li>Tool execution engine for local models</li>
+      <li>Provider-agnostic (Ollama, OpenAI, Anthropic, etc.)</li>
+    </ul>
+  </div>
+  <div class="comp-card not">
+    <h3>What we are NOT</h3>
+    <ul>
+      <li>Not a model wrapper — we don't host or modify models</li>
+      <li>Not an LLM framework (not LangChain/LlamaIndex)</li>
+      <li>Not a chatbot or AI application</li>
+      <li>Not a load balancer</li>
+      <li>Not a model training platform</li>
+    </ul>
+  </div>
+</div>
+
+<table class="analogy-table">
+  <tr><th>Traditional IT Security</th><th>Walacor Gateway (AI Security)</th></tr>
+  <tr><td>WAF inspects HTTP for SQL injection, XSS</td><td>Gateway inspects prompts/responses for PII, toxicity, safety</td></tr>
+  <tr><td>WAF logs every request for compliance</td><td>Gateway creates cryptographically chained audit records</td></tr>
+  <tr><td>Firewall enforces allow/deny rules</td><td>Gateway enforces model attestation + policy rules</td></tr>
+  <tr><td>Rate limiter controls request volume</td><td>Gateway enforces token budgets (daily/monthly)</td></tr>
+  <tr><td>SIEM dashboard shows security events</td><td>Lineage dashboard shows all AI interactions + chain verification</td></tr>
+</table>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>High-Level Architecture</h2>
+
+<div class="arch-diagram">
+  <div class="arch-box client">
+    <div class="label">Client</div>
+    <div class="name">Your App</div>
+    <div class="detail">Points to :8000<br>instead of LLM directly</div>
+  </div>
+  <div class="arch-arrow">&rarr;</div>
+  <div class="arch-box gateway">
+    <div class="label">Walacor Gateway</div>
+    <div class="name">Security & Governance Proxy</div>
+    <div class="detail">Auth &bull; Attest &bull; Policy &bull; Budget &bull; Tools &bull; Content Safety &bull; Audit Chain</div>
+    <div class="arch-stores">
+      <span class="store-tag">SQLite WAL</span>
+      <span class="store-tag">Walacor Ledger</span>
+      <span class="store-tag">Dashboard /lineage/</span>
+    </div>
+  </div>
+  <div class="arch-arrow">&rarr;</div>
+  <div class="arch-box provider">
+    <div class="label">LLM Providers</div>
+    <div class="name">Ollama / OpenAI / Anthropic</div>
+    <div class="detail">qwen3, gemma3, gpt-4,<br>claude, llama, etc.</div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2 class="page-break">Request Pipeline (8 Steps)</h2>
+
+<div class="pipeline">
+
+  <div class="step">
+    <div class="step-num auth">1</div>
+    <div class="step-body">
+      <div class="step-title">Authenticate Caller</div>
+      <div class="step-desc">Validate API key or JWT token. Resolve caller identity (user, team, roles, email) for audit trail.</div>
+      <div class="step-outcomes">
+        <span class="outcome pass">Valid key/JWT &rarr; proceed</span>
+        <span class="outcome block">Invalid &rarr; 401 Unauthorized</span>
+      </div>
+      <div class="step-file">auth/api_key.py &bull; auth/jwt_auth.py &bull; auth/identity.py</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num check">2</div>
+    <div class="step-body">
+      <div class="step-title">Model Attestation (G1)</div>
+      <div class="step-desc">Is this model registered and approved? Check attestation cache. Auto-attest on first use if no control plane. Block if model is revoked.</div>
+      <div class="step-outcomes">
+        <span class="outcome pass">Active &rarr; proceed</span>
+        <span class="outcome block">Revoked &rarr; 403 Forbidden</span>
+        <span class="outcome warn">Unknown + no CP &rarr; auto-attest</span>
+      </div>
+      <div class="step-file">pipeline/model_resolver.py &bull; control/store.py</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num check">3</div>
+    <div class="step-body">
+      <div class="step-title">Pre-Inference Policy (G3)</div>
+      <div class="step-desc">Evaluate policy rules: who can use which models, from which teams, under what conditions.</div>
+      <div class="step-outcomes">
+        <span class="outcome pass">Policy pass &rarr; proceed</span>
+        <span class="outcome block">Policy deny &rarr; 403 Forbidden</span>
+      </div>
+      <div class="step-file">pipeline/policy_evaluator.py</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num check">4</div>
+    <div class="step-body">
+      <div class="step-title">Token Budget Check</div>
+      <div class="step-desc">Has this tenant/user exceeded their daily or monthly token limit? Pre-reserve estimated tokens before the call.</div>
+      <div class="step-outcomes">
+        <span class="outcome pass">Budget OK &rarr; proceed</span>
+        <span class="outcome block">Exhausted &rarr; 429 Too Many Requests</span>
+      </div>
+      <div class="step-file">pipeline/budget_tracker.py</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num forward">5</div>
+    <div class="step-body">
+      <div class="step-title">Forward to LLM Provider</div>
+      <div class="step-desc">Send request to Ollama/OpenAI/Anthropic. For active tool strategy: inject tool definitions, override to non-streaming. Auto-detect model capabilities (tool support).</div>
+      <div class="step-file">pipeline/forwarder.py &bull; adapters/ollama.py &bull; adapters/openai.py</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num tool">6</div>
+    <div class="step-body">
+      <div class="step-title">Tool Execution Loop</div>
+      <div class="step-desc">If model requests tool calls (web search, MCP tools): gateway executes them, scans output for safety, hashes input/output, feeds results back to model. Repeats until model gives a final answer.</div>
+      <div class="step-outcomes">
+        <span class="outcome pass">Tool results safe &rarr; feed to model</span>
+        <span class="outcome block">Prompt injection detected &rarr; block tool output</span>
+      </div>
+      <div class="step-file">pipeline/orchestrator.py &bull; tools/web_search.py &bull; mcp/registry.py</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num analyze">7</div>
+    <div class="step-body">
+      <div class="step-title">Post-Inference Content Analysis (G4)</div>
+      <div class="step-desc">Scan the model's response through 3 analyzers before returning to the client.</div>
+      <div class="step-outcomes">
+        <span class="outcome block">PII (credit card, SSN, API key) &rarr; BLOCK</span>
+        <span class="outcome warn">PII (email, phone, IP) &rarr; WARN</span>
+        <span class="outcome block">Llama Guard S4 (child safety) &rarr; BLOCK</span>
+        <span class="outcome warn">Llama Guard S1/S9/S11 &rarr; WARN</span>
+        <span class="outcome block">Toxicity &rarr; BLOCK</span>
+      </div>
+      <div class="step-file">content/pii_detector.py &bull; content/toxicity_detector.py &bull; content/llama_guard.py</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num write">8</div>
+    <div class="step-body">
+      <div class="step-title">Audit Record + Session Chain (G5)</div>
+      <div class="step-desc">Build execution record with all metadata. Compute SHA3-512 chain hash linking to previous record (Merkle chain). Dual-write to Walacor ledger + local WAL. Emit OTel span.</div>
+      <div class="step-outcomes">
+        <span class="outcome pass">Record written &rarr; tamper-proof audit trail</span>
+      </div>
+      <div class="step-file">pipeline/hasher.py &bull; pipeline/session_chain.py &bull; wal/writer.py</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2 class="page-break">Tool Execution — How It Works</h2>
+
+<p style="font-size: 14px; color: #7a8ba5; margin-bottom: 16px;">
+  Local models (Ollama) can <em>request</em> tool calls but can't <em>execute</em> them.
+  The gateway acts as the execution engine — it runs the tool, scans the output for safety,
+  and feeds results back to the model.
+</p>
+
+<div class="tool-loop">
+  <div class="loop-flow">
+    <div class="loop-box model">
+      <div class="lbl">LLM</div>
+      <div class="val">qwen3:4b</div>
+    </div>
+    <div>
+      <div class="loop-arrow">&rarr;</div>
+      <div class="loop-label">"call web_search"</div>
+    </div>
+    <div class="loop-box gw">
+      <div class="lbl">Gateway</div>
+      <div class="val">Intercepts</div>
+    </div>
+    <div>
+      <div class="loop-arrow">&rarr;</div>
+      <div class="loop-label">executes tool</div>
+    </div>
+    <div class="loop-box ext">
+      <div class="lbl">External</div>
+      <div class="val">DuckDuckGo</div>
+    </div>
+    <div>
+      <div class="loop-arrow">&rarr;</div>
+      <div class="loop-label">results</div>
+    </div>
+    <div class="loop-box gw">
+      <div class="lbl">Gateway</div>
+      <div class="val">Scan + Hash</div>
+    </div>
+    <div>
+      <div class="loop-arrow">&rarr;</div>
+      <div class="loop-label">feed back</div>
+    </div>
+    <div class="loop-box model">
+      <div class="lbl">LLM</div>
+      <div class="val">Final Answer</div>
+    </div>
+  </div>
+  <div class="loop-return">
+    Loop repeats until model stops requesting tools (max iterations configurable).
+    <br>Every tool call is <span>SHA3-512 hashed</span> and recorded as a first-class audit event.
+  </div>
+</div>
+
+<table class="analogy-table">
+  <tr><th>Strategy</th><th>When</th><th>Who Executes Tools</th><th>Gateway Role</th></tr>
+  <tr>
+    <td style="color:#c9a227;font-weight:600;">Active</td>
+    <td>Local models (Ollama, Llama, Qwen)</td>
+    <td>The Gateway</td>
+    <td>Executes tools, scans output, hashes everything, feeds results back</td>
+  </tr>
+  <tr>
+    <td style="color:#3b82f6;font-weight:600;">Passive</td>
+    <td>Cloud providers (OpenAI, Anthropic)</td>
+    <td>The Provider</td>
+    <td>Records what happened — extracts tool interactions from the response</td>
+  </tr>
+</table>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2 class="page-break">How the Gateway Manages MCP & Tool Calls</h2>
+
+<p style="font-size: 14px; color: #c0c8d4; margin-bottom: 24px;">
+  The gateway does <strong>not</strong> invent tool calls. The <strong>model</strong> decides when to call a tool.
+  The gateway's job is to <em>make tools available</em>, <em>execute them safely</em>, and <em>audit everything</em>.
+</p>
+
+<!-- Phase 1: Startup -->
+<h3 style="color: #c9a227; font-size: 16px; margin: 28px 0 16px;">Phase 1: Startup — Tool Discovery</h3>
+<p style="font-size: 13px; color: #7a8ba5; margin-bottom: 16px;">
+  When the gateway starts, it connects to all configured tool sources and builds a unified catalog.
+</p>
+
+<div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px;">
+  <div style="flex: 1; min-width: 280px; background: #111827; border: 1px solid #2a3a52; border-radius: 12px; padding: 24px;">
+    <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #a855f7; margin-bottom: 12px;">Source 1: MCP Servers (external tools)</div>
+    <div style="font-size: 13px; color: #c0c8d4; margin-bottom: 12px;">
+      Configured via <code style="background:#1e2a3a;padding:2px 6px;border-radius:4px;font-size:12px;">WALACOR_MCP_SERVERS_JSON</code>
+    </div>
+    <div class="record-card" style="margin: 0; padding: 16px; font-size: 12px; line-height: 1.6;">
+      [{ <span class="key">"name"</span>: <span class="str">"my-db"</span>,<br>
+      &nbsp;&nbsp;&nbsp;<span class="key">"command"</span>: <span class="str">"npx"</span>,<br>
+      &nbsp;&nbsp;&nbsp;<span class="key">"args"</span>: [<span class="str">"mcp-server-postgres"</span>,<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"postgres://..."</span>] }]
+    </div>
+    <div style="font-size: 12px; color: #7a8ba5; margin-top: 12px;">
+      Gateway starts subprocess &rarr; connects via MCP protocol &rarr; calls <code style="background:#1e2a3a;padding:1px 4px;border-radius:3px;font-size:11px;">list_tools()</code> &rarr; discovers available tools
+    </div>
+    <div style="font-size: 11px; color: #4a5a72; margin-top: 8px; font-family: monospace;">mcp/client.py &bull; mcp/registry.py</div>
+  </div>
+
+  <div style="flex: 1; min-width: 280px; background: #111827; border: 1px solid #2a3a52; border-radius: 12px; padding: 24px;">
+    <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #c9a227; margin-bottom: 12px;">Source 2: Built-in Tools (e.g. web search)</div>
+    <div style="font-size: 13px; color: #c0c8d4; margin-bottom: 12px;">
+      Enabled via <code style="background:#1e2a3a;padding:2px 6px;border-radius:4px;font-size:12px;">WALACOR_WEB_SEARCH_ENABLED=true</code>
+    </div>
+    <div class="record-card" style="margin: 0; padding: 16px; font-size: 12px; line-height: 1.6;">
+      <span class="comment">// WebSearchTool duck-types MCPClient</span><br>
+      <span class="key">get_tools()</span> &rarr; [{ <span class="key">name</span>: <span class="str">"web_search"</span> }]<br>
+      <span class="key">call_tool(</span><span class="str">"web_search"</span>, {<span class="key">query</span>: ...}<span class="key">)</span><br>
+      &nbsp;&nbsp;&rarr; calls DuckDuckGo / Brave / SerpAPI
+    </div>
+    <div style="font-size: 12px; color: #7a8ba5; margin-top: 12px;">
+      No subprocess needed. Same interface as MCP — the registry doesn't know the difference.
+    </div>
+    <div style="font-size: 11px; color: #4a5a72; margin-top: 8px; font-family: monospace;">tools/web_search.py</div>
+  </div>
+</div>
+
+<div style="background: #111827; border: 1px solid #c9a227; border-radius: 12px; padding: 20px; margin-bottom: 32px; text-align: center;">
+  <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #c9a227; margin-bottom: 8px;">Unified Tool Registry</div>
+  <div style="font-size: 14px; color: #c0c8d4;">
+    Both sources register into <strong style="color: #fff;">ToolRegistry</strong> &mdash; a single catalog with one <code style="background:#1e2a3a;padding:2px 6px;border-radius:4px;font-size:12px;">execute_tool(name, args)</code> method.
+    <br>The orchestrator doesn't care if a tool is MCP or built-in.
+  </div>
+  <div style="font-size: 11px; color: #4a5a72; margin-top: 8px; font-family: monospace;">mcp/registry.py</div>
+</div>
+
+<!-- Phase 2: Request Time -->
+<h3 style="color: #c9a227; font-size: 16px; margin: 28px 0 16px;">Phase 2: Request Time — The Tool Loop</h3>
+<p style="font-size: 13px; color: #7a8ba5; margin-bottom: 16px;">
+  When a request comes in and the model is local (Ollama), the gateway manages the full tool lifecycle:
+</p>
+
+<div class="pipeline" style="margin-left: 0;">
+  <div class="step">
+    <div class="step-num" style="background: #1e1f14; border: 2px solid #c9a227; color: #c9a227;">A</div>
+    <div class="step-body">
+      <div class="step-title">Inject Tool Definitions</div>
+      <div class="step-desc">
+        Gateway reads all tools from ToolRegistry, converts them to OpenAI function-calling format,
+        and <strong>adds them to the request body</strong> before sending to Ollama.
+        The model now knows what tools are available.
+      </div>
+      <div class="record-card" style="margin-top: 8px; padding: 12px; font-size: 12px; line-height: 1.5;">
+        <span class="comment">// Gateway adds this to the request body:</span><br>
+        <span class="key">"tools"</span>: [{ <span class="key">"type"</span>: <span class="str">"function"</span>, <span class="key">"function"</span>: {<br>
+        &nbsp;&nbsp;<span class="key">"name"</span>: <span class="str">"web_search"</span>,<br>
+        &nbsp;&nbsp;<span class="key">"description"</span>: <span class="str">"Search the web for current information..."</span>,<br>
+        &nbsp;&nbsp;<span class="key">"parameters"</span>: { <span class="key">"query"</span>: { <span class="key">"type"</span>: <span class="str">"string"</span> } }
+        <br>}}]
+      </div>
+      <div class="step-file">orchestrator.py:282-301 &bull; _inject_tools_into_call()</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num" style="background: #0f2018; border: 2px solid #10b981; color: #10b981;">B</div>
+    <div class="step-body">
+      <div class="step-title">Model Responds with Tool Call (not an answer)</div>
+      <div class="step-desc">
+        The model decides on its own whether to use a tool. If it needs information,
+        it responds with <code style="background:#1e2a3a;padding:1px 4px;border-radius:3px;font-size:12px;">finish_reason: "tool_calls"</code>
+        instead of a regular answer.
+      </div>
+      <div class="record-card" style="margin-top: 8px; padding: 12px; font-size: 12px; line-height: 1.5;">
+        <span class="comment">// Ollama says: "I want to call this tool"</span><br>
+        { <span class="key">"finish_reason"</span>: <span class="str">"tool_calls"</span>,<br>
+        &nbsp;&nbsp;<span class="key">"tool_calls"</span>: [{ <span class="key">"function"</span>: {<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"name"</span>: <span class="str">"web_search"</span>,<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"arguments"</span>: <span class="str">"{\"query\": \"Python programming\"}"</span><br>
+        &nbsp;&nbsp;}}]<br>}
+      </div>
+      <div style="font-size: 12px; color: #ef4444; margin-top: 8px;">
+        The model CANNOT execute this itself. It's just text output saying "I want to search."
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num" style="background: #1e1422; border: 2px solid #a855f7; color: #a855f7;">C</div>
+    <div class="step-body">
+      <div class="step-title">Gateway Intercepts and Executes the Tool</div>
+      <div class="step-desc">
+        The gateway sees <code style="background:#1e2a3a;padding:1px 4px;border-radius:3px;font-size:12px;">finish_reason: tool_calls</code>,
+        looks up the tool in ToolRegistry, validates the arguments against the tool's schema,
+        and executes it.
+      </div>
+      <div class="record-card" style="margin-top: 8px; padding: 12px; font-size: 12px; line-height: 1.5;">
+        <span class="comment">// Gateway does this:</span><br>
+        <span class="key">1.</span> Validate args against schema (required fields present?)<br>
+        <span class="key">2.</span> <span class="key">registry.execute_tool(</span><span class="str">"web_search"</span>, {<span class="key">query</span>: <span class="str">"Python"</span>}<span class="key">)</span><br>
+        <span class="key">3.</span> Registry dispatches to WebSearchTool (or MCPClient)<br>
+        <span class="key">4.</span> WebSearchTool calls DuckDuckGo API &rarr; gets results<br>
+        <span class="key">5.</span> Returns ToolResult { content, sources, duration_ms }
+      </div>
+      <div class="step-file">orchestrator.py:422-479 &bull; _execute_one_tool()</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num" style="background: #1e1418; border: 2px solid #ef4444; color: #ef4444;">D</div>
+    <div class="step-body">
+      <div class="step-title">Scan Tool Output for Safety</div>
+      <div class="step-desc">
+        Before feeding tool results back to the model, the gateway runs all content analyzers
+        on the tool output. This catches <strong>indirect prompt injection</strong> — a malicious website
+        could embed instructions in its content to manipulate the model.
+      </div>
+      <div class="step-outcomes">
+        <span class="outcome pass">Clean output &rarr; feed to model</span>
+        <span class="outcome block">PII/toxicity/injection &rarr; replace with "[blocked by content policy]"</span>
+      </div>
+      <div class="step-file">orchestrator.py:456-471</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num" style="background: #1e2a3a; border: 2px solid #06b6d4; color: #06b6d4;">E</div>
+    <div class="step-body">
+      <div class="step-title">Hash + Record Tool Event</div>
+      <div class="step-desc">
+        Gateway computes SHA3-512 hashes of the tool's input and output, records source URLs,
+        duration, and content analysis results. This becomes a first-class audit event.
+      </div>
+      <div class="record-card" style="margin-top: 8px; padding: 12px; font-size: 12px; line-height: 1.5;">
+        { <span class="key">"tool_name"</span>: <span class="str">"web_search"</span>,<br>
+        &nbsp;&nbsp;<span class="key">"input_data"</span>: { <span class="key">"query"</span>: <span class="str">"Python programming"</span> },<br>
+        &nbsp;&nbsp;<span class="key">"input_hash"</span>: <span class="str">"a3f8c2...SHA3-512"</span>,<br>
+        &nbsp;&nbsp;<span class="key">"output_hash"</span>: <span class="str">"7b1d4e...SHA3-512"</span>,<br>
+        &nbsp;&nbsp;<span class="key">"sources"</span>: [{ <span class="key">"title"</span>: <span class="str">"Python.org"</span>, <span class="key">"url"</span>: <span class="str">"..."</span> }],<br>
+        &nbsp;&nbsp;<span class="key">"content_analysis"</span>: [{ <span class="key">"verdict"</span>: <span class="str">"pass"</span> }],<br>
+        &nbsp;&nbsp;<span class="key">"duration_ms"</span>: <span class="num">342</span> }
+      </div>
+      <div class="step-file">orchestrator.py:336-372 &bull; _build_tool_event_record()</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num" style="background: #0f2018; border: 2px solid #10b981; color: #10b981;">F</div>
+    <div class="step-body">
+      <div class="step-title">Feed Results Back to Model &rarr; Get Final Answer</div>
+      <div class="step-desc">
+        Gateway builds a new request with the tool results injected as a "tool" role message
+        and sends it back to the model. The model now generates its final answer using the tool data.
+        If the model requests more tools, the loop repeats (steps B-F).
+      </div>
+      <div class="record-card" style="margin-top: 8px; padding: 12px; font-size: 12px; line-height: 1.5;">
+        <span class="comment">// Gateway sends this back to Ollama:</span><br>
+        { <span class="key">"role"</span>: <span class="str">"tool"</span>,<br>
+        &nbsp;&nbsp;<span class="key">"tool_call_id"</span>: <span class="str">"call_abc123"</span>,<br>
+        &nbsp;&nbsp;<span class="key">"content"</span>: <span class="str">"{ results: [{ title: \"Python.org\", ... }] }"</span> }
+      </div>
+      <div class="step-file">orchestrator.py:482-532 &bull; _run_active_tool_loop()</div>
+    </div>
+  </div>
+</div>
+
+<!-- Key insight box -->
+<div style="background: linear-gradient(135deg, #1a1810, #1e1f14); border: 2px solid #c9a227; border-radius: 12px; padding: 24px; margin: 32px 0;">
+  <div style="font-size: 16px; font-weight: 700; color: #c9a227; margin-bottom: 12px;">Key Insight: The Model Never Touches the Outside World</div>
+  <div style="font-size: 14px; color: #c0c8d4; line-height: 1.8;">
+    The LLM only sends text that says <em>"I want to call web_search with query=X"</em>. It has <strong>no network access</strong>,
+    no API keys, no database credentials. The <strong>gateway is the only thing</strong> that actually executes tools,
+    and it does so through a controlled pipeline:
+  </div>
+  <div style="display: flex; gap: 16px; margin-top: 16px; flex-wrap: wrap;">
+    <div style="flex: 1; min-width: 180px; background: #0a0e17; border: 1px solid #2a3a52; border-radius: 8px; padding: 14px; text-align: center;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #7a8ba5;">Step 1</div>
+      <div style="font-size: 14px; color: #fff; font-weight: 600;">Validate Arguments</div>
+      <div style="font-size: 12px; color: #7a8ba5;">Check required fields against tool schema</div>
+    </div>
+    <div style="flex: 1; min-width: 180px; background: #0a0e17; border: 1px solid #2a3a52; border-radius: 8px; padding: 14px; text-align: center;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #7a8ba5;">Step 2</div>
+      <div style="font-size: 14px; color: #fff; font-weight: 600;">Execute with Timeout</div>
+      <div style="font-size: 12px; color: #7a8ba5;">30s enforced timeout per tool call</div>
+    </div>
+    <div style="flex: 1; min-width: 180px; background: #0a0e17; border: 1px solid #2a3a52; border-radius: 8px; padding: 14px; text-align: center;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #7a8ba5;">Step 3</div>
+      <div style="font-size: 14px; color: #fff; font-weight: 600;">Scan Output</div>
+      <div style="font-size: 12px; color: #7a8ba5;">PII + toxicity + Llama Guard</div>
+    </div>
+    <div style="flex: 1; min-width: 180px; background: #0a0e17; border: 1px solid #2a3a52; border-radius: 8px; padding: 14px; text-align: center;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #7a8ba5;">Step 4</div>
+      <div style="font-size: 14px; color: #fff; font-weight: 600;">Hash Everything</div>
+      <div style="font-size: 12px; color: #7a8ba5;">SHA3-512 of input + output for audit</div>
+    </div>
+  </div>
+</div>
+
+<!-- Model capability auto-detection -->
+<h3 style="color: #c9a227; font-size: 16px; margin: 28px 0 16px;">Phase 3: Smart Model Detection</h3>
+<p style="font-size: 13px; color: #7a8ba5; margin-bottom: 16px;">
+  Not all models support tool calling. The gateway automatically detects this and adapts.
+</p>
+
+<div style="display: flex; gap: 16px; flex-wrap: wrap;">
+  <div style="flex: 1; min-width: 320px; background: #111827; border: 1px solid #10b981; border-radius: 12px; padding: 24px;">
+    <div style="font-size: 14px; font-weight: 600; color: #10b981; margin-bottom: 8px;">qwen3:4b — supports tools</div>
+    <div style="font-size: 13px; color: #c0c8d4; line-height: 1.7;">
+      1st request: Gateway injects tools &rarr; model accepts &rarr; gateway caches <code style="background:#1e2a3a;padding:1px 4px;border-radius:3px;font-size:11px;">supports_tools=True</code><br>
+      2nd+ request: Gateway knows tools work &rarr; injects tools &rarr; full tool loop available
+    </div>
+  </div>
+  <div style="flex: 1; min-width: 320px; background: #111827; border: 1px solid #ef4444; border-radius: 12px; padding: 24px;">
+    <div style="font-size: 14px; font-weight: 600; color: #ef4444; margin-bottom: 8px;">gemma3:1b — does NOT support tools</div>
+    <div style="font-size: 13px; color: #c0c8d4; line-height: 1.7;">
+      1st request: Gateway injects tools &rarr; model returns 400 "does not support tools" &rarr; gateway strips tools, retries, caches <code style="background:#1e2a3a;padding:1px 4px;border-radius:3px;font-size:11px;">supports_tools=False</code><br>
+      2nd+ request: Gateway skips tool injection entirely &rarr; no wasted round-trip
+    </div>
+  </div>
+</div>
+
+<div style="font-size: 11px; color: #4a5a72; margin-top: 8px; font-family: monospace;">orchestrator.py:55-68 &bull; _model_capabilities registry</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>What Gets Recorded (Audit Record)</h2>
+
+<div class="record-card">
+<span class="comment">// Every LLM interaction produces this record</span><br>
+{<br>
+&nbsp;&nbsp;<span class="key">"execution_id"</span>: <span class="str">"550e8400-e29b-..."</span>,<br>
+&nbsp;&nbsp;<span class="key">"model_id"</span>: <span class="str">"qwen3:4b"</span>,<br>
+&nbsp;&nbsp;<span class="key">"provider"</span>: <span class="str">"ollama"</span>,<br>
+&nbsp;&nbsp;<span class="key">"prompt_text"</span>: <span class="str">"What is Python?"</span>,<br>
+&nbsp;&nbsp;<span class="key">"response_text"</span>: <span class="str">"Python is a programming..."</span>,<br>
+&nbsp;&nbsp;<span class="key">"thinking_content"</span>: <span class="str">"&lt;think&gt;The user asked about...&lt;/think&gt;"</span>, <span class="comment">// reasoning stripped from response</span><br>
+&nbsp;&nbsp;<span class="key">"attestation_id"</span>: <span class="str">"self-attested:qwen3:4b"</span>,<br>
+&nbsp;&nbsp;<span class="key">"policy_result"</span>: <span class="str">"pass"</span>,<br>
+&nbsp;&nbsp;<span class="key">"content_analysis"</span>: [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="key">"analyzer"</span>: <span class="str">"pii"</span>, <span class="key">"verdict"</span>: <span class="str">"pass"</span> },<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="key">"analyzer"</span>: <span class="str">"toxicity"</span>, <span class="key">"verdict"</span>: <span class="str">"pass"</span> },<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="key">"analyzer"</span>: <span class="str">"llama_guard"</span>, <span class="key">"verdict"</span>: <span class="str">"pass"</span>, <span class="key">"category"</span>: <span class="str">"safe"</span> }<br>
+&nbsp;&nbsp;],<br>
+&nbsp;&nbsp;<span class="key">"token_usage"</span>: { <span class="key">"prompt"</span>: <span class="num">186</span>, <span class="key">"completion"</span>: <span class="num">120</span>, <span class="key">"total"</span>: <span class="num">306</span> },<br>
+&nbsp;&nbsp;<span class="key">"latency_ms"</span>: <span class="num">8500</span>,<br>
+&nbsp;&nbsp;<span class="key">"user"</span>: <span class="str">"dharmpratap"</span>,<br>
+&nbsp;&nbsp;<span class="key">"team"</span>: <span class="str">"engineering"</span>,<br>
+&nbsp;&nbsp;<span class="comment">// Merkle chain — links to previous record</span><br>
+&nbsp;&nbsp;<span class="key">"sequence_number"</span>: <span class="num">5</span>,<br>
+&nbsp;&nbsp;<span class="key">"previous_record_hash"</span>: <span class="str">"a3f8c2d1..."</span>,<br>
+&nbsp;&nbsp;<span class="key">"record_hash"</span>: <span class="str">"7b1d4e9f..."</span> <span class="comment">// SHA3-512 — if anyone edits this record, the chain breaks</span><br>
+}
+</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Compliance Coverage</h2>
+
+<div class="compliance-row">
+  <div class="compliance-badge">
+    <div class="framework">European Union</div>
+    <div class="name">EU AI Act</div>
+  </div>
+  <div class="compliance-badge">
+    <div class="framework">NIST</div>
+    <div class="name">AI RMF</div>
+  </div>
+  <div class="compliance-badge">
+    <div class="framework">AICPA</div>
+    <div class="name">SOC 2</div>
+  </div>
+  <div class="compliance-badge">
+    <div class="framework">Crypto</div>
+    <div class="name">SHA3-512</div>
+  </div>
+  <div class="compliance-badge">
+    <div class="framework">Observability</div>
+    <div class="name">OpenTelemetry</div>
+  </div>
+  <div class="compliance-badge">
+    <div class="framework">Metrics</div>
+    <div class="name">Prometheus</div>
+  </div>
+</div>
+
+<table class="analogy-table">
+  <tr><th>Requirement</th><th>How Gateway Satisfies It</th></tr>
+  <tr><td>EU AI Act Art. 12 — Record-keeping</td><td>Every interaction recorded with full prompt, response, model, user, timestamp</td></tr>
+  <tr><td>EU AI Act Art. 14 — Human oversight</td><td>Lineage dashboard, content analysis verdicts, chain verification</td></tr>
+  <tr><td>NIST AI RMF — Govern</td><td>Policy rules, model attestation, token budgets, role-based access</td></tr>
+  <tr><td>SOC 2 — Processing Integrity</td><td>SHA3-512 Merkle chain — tamper-evident, independently verifiable</td></tr>
+  <tr><td>SOC 2 — Confidentiality</td><td>PII detection, API key/credential scanning in responses</td></tr>
+</table>
+
+<p style="margin-top: 56px; font-size: 12px; color: #4a5a72; text-align: center;">
+  Walacor Gateway &bull; docs/gateway-workflow.html &bull; Generated 2026-03-06
+</p>
+
+</body>
+</html>

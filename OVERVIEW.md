@@ -81,6 +81,9 @@ Gateway listens on `http://localhost:8000`. Point any OpenAI-compatible client t
 | `/v1/messages` | Anthropic |
 | `/health` | Status, cache freshness, WAL backlog |
 | `/metrics` | Prometheus |
+| `/lineage/` | Audit lineage dashboard |
+| `/v1/control/discover` | Scan providers for available models |
+| `/v1/control/status` | Gateway status (auth, providers, caches, budgets) |
 
 ---
 
@@ -130,3 +133,12 @@ WALACOR_PROVIDER_OPENAI_KEY=sk-...   # or whichever provider you use
 ```
 
 Everything else has safe defaults. See [README.md](README.md) for the full configuration reference.
+
+---
+
+## Further reading
+
+- [How It Works](docs/HOW-IT-WORKS.md) — complete walkthrough of the pipeline, tool execution, MCP, and audit trail
+- [Visual Workflow](docs/gateway-workflow.html) — interactive HTML diagram
+- [Executive Briefing](docs/WIKI-EXECUTIVE.md) — CEO/leadership narrative
+- [EU AI Act Compliance](docs/EU-AI-ACT-COMPLIANCE.md) — regulatory mapping

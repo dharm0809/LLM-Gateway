@@ -83,6 +83,34 @@ async def lineage_attempts(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+async def lineage_metrics_history(request: Request) -> JSONResponse:
+    """GET /v1/lineage/metrics?range=1h|24h|7d|30d — time-bucketed attempt metrics for charting."""
+    reader = _reader_or_503()
+    if reader is None:
+        return JSONResponse({"error": "Lineage reader not available"}, status_code=503)
+    range_key = request.query_params.get("range", "1h")
+    try:
+        data = reader.get_metrics_history(range_key)
+        return JSONResponse(data)
+    except Exception as e:
+        logger.error("lineage_metrics_history error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def lineage_token_latency_history(request: Request) -> JSONResponse:
+    """GET /v1/lineage/token-latency?range=1h|24h|7d|30d — time-bucketed token + latency metrics."""
+    reader = _reader_or_503()
+    if reader is None:
+        return JSONResponse({"error": "Lineage reader not available"}, status_code=503)
+    range_key = request.query_params.get("range", "1h")
+    try:
+        data = reader.get_token_latency_history(range_key)
+        return JSONResponse(data)
+    except Exception as e:
+        logger.error("lineage_token_latency_history error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 async def lineage_verify(request: Request) -> JSONResponse:
     """GET /v1/lineage/verify/{session_id} — server-side chain verification."""
     reader = _reader_or_503()

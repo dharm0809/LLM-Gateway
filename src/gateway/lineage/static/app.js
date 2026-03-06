@@ -13,6 +13,50 @@ const $statusDot = document.getElementById('status-dot');
 const $statusLabel = document.getElementById('status-label');
 const $statusMeta = document.getElementById('status-meta');
 
+// ─── Theme Toggle ────────────────────────────────────────────────
+
+function initTheme() {
+    var saved = localStorage.getItem('walacor_theme');
+    if (saved === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+    }
+    updateThemeIcon();
+}
+
+function toggleTheme() {
+    var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    document.documentElement.classList.add('theme-transitioning');
+    if (isLight) {
+        document.documentElement.removeAttribute('data-theme');
+        localStorage.setItem('walacor_theme', 'dark');
+    } else {
+        document.documentElement.setAttribute('data-theme', 'light');
+        localStorage.setItem('walacor_theme', 'light');
+    }
+    updateThemeIcon();
+    setTimeout(function() {
+        document.documentElement.classList.remove('theme-transitioning');
+    }, 350);
+}
+
+function updateThemeIcon() {
+    var icon = document.getElementById('theme-icon');
+    if (!icon) return;
+    var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    icon.innerHTML = isLight ? '&#9790;' : '&#9788;';
+}
+
+initTheme();
+
+var $themeToggle = document.getElementById('theme-toggle');
+if ($themeToggle) {
+    $themeToggle.addEventListener('click', toggleTheme);
+}
+
+function getCSSVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
 // ─── Safe DOM helper ─────────────────────────────────────────────
 
 function setHTML(el, html) {
@@ -61,8 +105,9 @@ document.querySelectorAll('.tab').forEach(function(t) {
 });
 
 async function render(view, params) {
-    // Stop throughput chart when leaving overview
+    // Stop charts when leaving overview
     if (_throughputChart) { _throughputChart.destroy(); _throughputChart = null; }
+    if (_tokenLatencyChart) { _tokenLatencyChart.destroy(); _tokenLatencyChart = null; }
     $content.textContent = '';
     try {
         switch (view) {
@@ -137,6 +182,8 @@ function ThroughputChart(canvasId) {
     this.prevMetrics = null;
     this.prevTime = null;
     this.hasData = false;
+    this.activeRange = 'current'; // 'current' | '1h' | '24h' | '7d' | '30d'
+    this.histData = null;    // {buckets: [{t, total, allowed, blocked}], range: str}
 }
 
 ThroughputChart.prototype.start = function() {
@@ -254,7 +301,7 @@ ThroughputChart.prototype._draw = function() {
     ctx.clearRect(0, 0, w, h);
 
     // Grid lines
-    ctx.strokeStyle = '#1a1a2e';
+    ctx.strokeStyle = getCSSVar('--chart-grid') || '#1a1a2e';
     ctx.lineWidth = 0.5;
     var gridRows = 4;
     for (var gi = 0; gi <= gridRows; gi++) {
@@ -284,7 +331,7 @@ ThroughputChart.prototype._draw = function() {
 
     // Y-axis labels
     ctx.font = '10px "JetBrains Mono", monospace';
-    ctx.fillStyle = '#4c4c60';
+    ctx.fillStyle = getCSSVar('--chart-label') || '#4c4c60';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     for (var yi = 0; yi <= gridRows; yi++) {
@@ -379,7 +426,7 @@ ThroughputChart.prototype._draw = function() {
 
     // Draw main gold line (total)
     ctx.beginPath();
-    ctx.strokeStyle = '#c9a84c';
+    ctx.strokeStyle = getCSSVar('--gold') || '#c9a84c';
     ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
@@ -412,7 +459,7 @@ ThroughputChart.prototype._draw = function() {
     // Core
     ctx.beginPath();
     ctx.arc(px, py, 2, 0, Math.PI * 2);
-    ctx.fillStyle = '#c9a84c';
+    ctx.fillStyle = getCSSVar('--gold') || '#c9a84c';
     ctx.fill();
 
     // Request animation frame for pulse
@@ -427,6 +474,921 @@ ThroughputChart.prototype.destroy = function() {
     this.canvas = null;
     this.ctx = null;
     this.data = [];
+    this.histData = null;
+};
+
+ThroughputChart.prototype.setRange = function(rangeKey) {
+    this.activeRange = rangeKey;
+
+    // Update button states
+    var btns = document.querySelectorAll('.throughput-range-btn');
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].classList.toggle('active', btns[i].dataset.range === rangeKey);
+    }
+
+    // Update title
+    var titleEl = document.getElementById('tp-title');
+    var liveDot = document.getElementById('tp-live-dot');
+    var statusEl = document.getElementById('tp-status');
+    var rangeLabels = { 'current': 'Live Throughput', '1h': 'Throughput \u2014 1 Hour', '24h': 'Throughput \u2014 24 Hours', '7d': 'Throughput \u2014 7 Days', '30d': 'Throughput \u2014 1 Month' };
+    if (titleEl) titleEl.textContent = rangeLabels[rangeKey] || 'Throughput';
+    if (liveDot) liveDot.style.display = rangeKey === 'current' ? '' : 'none';
+
+    // Toggle counters vs summary
+    var liveCounters = document.getElementById('tp-live-counters');
+    var histSummary = document.getElementById('tp-hist-summary');
+    if (liveCounters) liveCounters.style.display = rangeKey === 'current' ? '' : 'none';
+    if (histSummary) histSummary.style.display = rangeKey === 'current' ? 'none' : '';
+
+    if (rangeKey === 'current') {
+        this.histData = null;
+        if (statusEl) statusEl.textContent = 'initializing';
+        this.start();
+    } else {
+        this.stop();
+        this.histData = null;
+        if (statusEl) statusEl.textContent = 'loading\u2026';
+        var self = this;
+        fetch(API + '/metrics?range=' + rangeKey)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                self.histData = data;
+                self.canvas = document.getElementById(self.canvasId);
+                if (!self.canvas) return;
+                self.ctx = self.canvas.getContext('2d');
+                self._resize();
+                self._drawHistorical();
+                self._updateHistSummary(data);
+                if (statusEl) statusEl.textContent = (data.buckets || []).length + ' data points';
+                var elWait = document.getElementById('tp-waiting');
+                if (elWait) elWait.style.display = (data.buckets || []).length > 0 ? 'none' : 'block';
+            })
+            .catch(function() {
+                if (statusEl) statusEl.textContent = 'error loading data';
+            });
+    }
+};
+
+ThroughputChart.prototype._updateHistSummary = function(data) {
+    var buckets = data.buckets || [];
+    var totalReqs = 0, totalAllowed = 0, totalBlocked = 0;
+    for (var i = 0; i < buckets.length; i++) {
+        totalReqs += buckets[i].total;
+        totalAllowed += buckets[i].allowed;
+        totalBlocked += buckets[i].blocked;
+    }
+    var pct = totalReqs > 0 ? ((totalAllowed / totalReqs) * 100).toFixed(0) : '100';
+    var rangeLabels = { '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days' };
+
+    var elTotal = document.getElementById('tp-hist-total');
+    var elPct = document.getElementById('tp-hist-pct');
+    var elPeriod = document.getElementById('tp-hist-period');
+
+    if (elTotal) elTotal.textContent = formatNumber(totalReqs);
+    if (elPct) {
+        elPct.textContent = pct + '%';
+        elPct.className = 'counter-value ' + (parseInt(pct) >= 90 ? 'green' : 'red');
+    }
+    if (elPeriod) elPeriod.textContent = rangeLabels[this.activeRange] || this.activeRange;
+};
+
+ThroughputChart.prototype._drawHistorical = function() {
+    if (!this.ctx || !this.canvas || !this.histData) return;
+    var buckets = this.histData.buckets || [];
+    var ctx = this.ctx;
+    var w = this.w;
+    var h = this.h;
+    var pad = { top: 16, right: 16, bottom: 28, left: 48 };
+    var chartW = w - pad.left - pad.right;
+    var chartH = h - pad.top - pad.bottom;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Grid
+    ctx.strokeStyle = getCSSVar('--chart-grid') || '#1a1a2e';
+    ctx.lineWidth = 0.5;
+    var gridRows = 4;
+    for (var gi = 0; gi <= gridRows; gi++) {
+        var gy = pad.top + (chartH / gridRows) * gi;
+        ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(w - pad.right, gy); ctx.stroke();
+    }
+    var gridCols = 6;
+    for (var gj = 0; gj <= gridCols; gj++) {
+        var gx = pad.left + (chartW / gridCols) * gj;
+        ctx.beginPath(); ctx.moveTo(gx, pad.top); ctx.lineTo(gx, h - pad.bottom); ctx.stroke();
+    }
+
+    if (buckets.length < 2) return;
+
+    // Y scale (total count per bucket)
+    var maxVal = 1;
+    for (var di = 0; di < buckets.length; di++) {
+        if (buckets[di].total > maxVal) maxVal = buckets[di].total;
+    }
+    maxVal = maxVal * 1.2;
+
+    // Y-axis labels
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillStyle = getCSSVar('--chart-label') || '#4c4c60';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (var yi = 0; yi <= gridRows; yi++) {
+        var yVal = maxVal - (maxVal / gridRows) * yi;
+        var yPos = pad.top + (chartH / gridRows) * yi;
+        ctx.fillText(yVal < 1 ? yVal.toFixed(1) : Math.round(yVal).toString(), pad.left - 6, yPos);
+    }
+
+    // X-axis time labels (adaptive to range)
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    var labelCount = Math.min(6, buckets.length);
+    var range = this.activeRange;
+    for (var xi = 0; xi < labelCount; xi++) {
+        var bucketIdx = Math.round(xi * (buckets.length - 1) / (labelCount - 1));
+        var xp = pad.left + (bucketIdx / (buckets.length - 1)) * chartW;
+        var t = buckets[bucketIdx].t;
+        var label = '';
+        if (range === '1h') {
+            label = t.substring(11, 16); // HH:MM
+        } else if (range === '24h') {
+            label = t.substring(11, 16); // HH:MM
+        } else if (range === '7d') {
+            label = t.substring(5, 10).replace('-', '/') + ' ' + t.substring(11, 13) + 'h';
+        } else {
+            label = t.substring(5, 10).replace('-', '/');
+        }
+        ctx.fillText(label, xp, h - pad.bottom + 8);
+    }
+
+    // Helpers
+    function dataX(idx) { return pad.left + (idx / (buckets.length - 1)) * chartW; }
+    function dataY(val) { return pad.top + chartH - (val / maxVal) * chartH; }
+
+    // Allowed fill (green)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(0));
+    for (var ai = 0; ai < buckets.length; ai++) ctx.lineTo(dataX(ai), dataY(buckets[ai].allowed));
+    ctx.lineTo(dataX(buckets.length - 1), dataY(0));
+    ctx.closePath();
+    var greenGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    greenGrad.addColorStop(0, 'rgba(52, 211, 153, 0.12)');
+    greenGrad.addColorStop(1, 'rgba(52, 211, 153, 0.01)');
+    ctx.fillStyle = greenGrad;
+    ctx.fill();
+
+    // Blocked fill (red)
+    if (buckets.some(function(b) { return b.blocked > 0; })) {
+        ctx.beginPath();
+        ctx.moveTo(dataX(0), dataY(0));
+        for (var bi = 0; bi < buckets.length; bi++) ctx.lineTo(dataX(bi), dataY(buckets[bi].blocked));
+        ctx.lineTo(dataX(buckets.length - 1), dataY(0));
+        ctx.closePath();
+        var redGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+        redGrad.addColorStop(0, 'rgba(239, 68, 68, 0.15)');
+        redGrad.addColorStop(1, 'rgba(239, 68, 68, 0.01)');
+        ctx.fillStyle = redGrad;
+        ctx.fill();
+    }
+
+    // Total fill (gold)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(0));
+    for (var fi = 0; fi < buckets.length; fi++) ctx.lineTo(dataX(fi), dataY(buckets[fi].total));
+    ctx.lineTo(dataX(buckets.length - 1), dataY(0));
+    ctx.closePath();
+    var goldGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    goldGrad.addColorStop(0, 'rgba(201, 168, 76, 0.18)');
+    goldGrad.addColorStop(1, 'rgba(201, 168, 76, 0.01)');
+    ctx.fillStyle = goldGrad;
+    ctx.fill();
+
+    // Lines — allowed (green)
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(52, 211, 153, 0.5)';
+    ctx.lineWidth = 1.2;
+    for (var gli = 0; gli < buckets.length; gli++) {
+        var glx = dataX(gli), gly = dataY(buckets[gli].allowed);
+        if (gli === 0) ctx.moveTo(glx, gly); else ctx.lineTo(glx, gly);
+    }
+    ctx.stroke();
+
+    // Lines — blocked (red)
+    if (buckets.some(function(b) { return b.blocked > 0; })) {
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+        ctx.lineWidth = 1.2;
+        for (var rli = 0; rli < buckets.length; rli++) {
+            var rlx = dataX(rli), rly = dataY(buckets[rli].blocked);
+            if (rli === 0) ctx.moveTo(rlx, rly); else ctx.lineTo(rlx, rly);
+        }
+        ctx.stroke();
+    }
+
+    // Main gold line (total)
+    ctx.beginPath();
+    ctx.strokeStyle = getCSSVar('--gold') || '#c9a84c';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (var li = 0; li < buckets.length; li++) {
+        var lx = dataX(li), ly = dataY(buckets[li].total);
+        if (li === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
+    }
+    ctx.stroke();
+    // No pulse dot for historical mode
+};
+
+// ─── Token Usage + Latency Charts ────────────────────────────────
+
+var _tokenLatencyChart = null;
+
+function TokenLatencyChart(tokenCanvasId, latencyCanvasId) {
+    this.tokenCanvas = null;
+    this.latencyCanvas = null;
+    this.tokenCtx = null;
+    this.latencyCtx = null;
+    this.tokenCanvasId = tokenCanvasId;
+    this.latencyCanvasId = latencyCanvasId;
+    this.tokenData = [];     // {ts, promptPerSec, completionPerSec, totalTokens}
+    this.latencyData = [];   // {ts, avgMs, maxMs, reqCount}
+    this.maxPoints = 60;
+    this.pollInterval = 3000;
+    this.timer = null;
+    this.animFrame = null;
+    this.prevMetrics = null;
+    this.prevTime = null;
+    this.hasTokenData = false;
+    this.hasLatencyData = false;
+    this.activeRange = 'current';
+    this.histData = null;
+}
+
+TokenLatencyChart.prototype.start = function() {
+    this.tokenCanvas = document.getElementById(this.tokenCanvasId);
+    this.latencyCanvas = document.getElementById(this.latencyCanvasId);
+    if (this.tokenCanvas) this.tokenCtx = this.tokenCanvas.getContext('2d');
+    if (this.latencyCanvas) this.latencyCtx = this.latencyCanvas.getContext('2d');
+    this._resize();
+    this._poll();
+    var self = this;
+    this.timer = setInterval(function() { self._poll(); }, this.pollInterval);
+};
+
+TokenLatencyChart.prototype.stop = function() {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.animFrame) { cancelAnimationFrame(this.animFrame); this.animFrame = null; }
+    this.prevMetrics = null;
+    this.prevTime = null;
+};
+
+TokenLatencyChart.prototype._resize = function() {
+    var canvases = [
+        { canvas: this.tokenCanvas, ctx: 'tokenCtx' },
+        { canvas: this.latencyCanvas, ctx: 'latencyCtx' }
+    ];
+    for (var i = 0; i < canvases.length; i++) {
+        var c = canvases[i].canvas;
+        if (!c) continue;
+        var rect = c.parentElement.getBoundingClientRect();
+        var dpr = window.devicePixelRatio || 1;
+        c.width = rect.width * dpr;
+        c.height = rect.height * dpr;
+        var cctx = c.getContext('2d');
+        cctx.scale(dpr, dpr);
+    }
+};
+
+TokenLatencyChart.prototype._poll = async function() {
+    try {
+        var resp = await fetch('/metrics');
+        if (!resp.ok) return;
+        var text = await resp.text();
+        var m = parsePrometheusMetrics(text);
+        var now = Date.now();
+
+        var promptTokens = sumMetric(m, 'walacor_gateway_token_usage_total', 'token_type="prompt"');
+        var completionTokens = sumMetric(m, 'walacor_gateway_token_usage_total', 'token_type="completion"');
+        var totalTokens = promptTokens + completionTokens;
+        var durationSum = sumMetric(m, 'walacor_gateway_forward_duration_seconds_sum', '');
+        var durationCount = sumMetric(m, 'walacor_gateway_forward_duration_seconds_count', '');
+
+        if (this.prevMetrics !== null && this.prevTime !== null) {
+            var dt = (now - this.prevTime) / 1000;
+            if (dt > 0) {
+                var promptPerSec = Math.max(0, (promptTokens - this.prevMetrics.promptTokens) / dt);
+                var completionPerSec = Math.max(0, (completionTokens - this.prevMetrics.completionTokens) / dt);
+
+                this.tokenData.push({
+                    ts: now,
+                    promptPerSec: promptPerSec,
+                    completionPerSec: completionPerSec,
+                    totalTokens: totalTokens
+                });
+                if (this.tokenData.length > this.maxPoints) this.tokenData.shift();
+                this.hasTokenData = true;
+
+                // Latency: delta of duration_sum / delta of duration_count
+                var dSum = durationSum - this.prevMetrics.durationSum;
+                var dCount = durationCount - this.prevMetrics.durationCount;
+                var avgMs = dCount > 0 ? (dSum / dCount) * 1000 : 0;
+                // For max, we approximate with avgMs * 1.5 in live mode (no per-request max in counters)
+                var maxMs = dCount > 0 ? avgMs * 1.5 : 0;
+
+                this.latencyData.push({
+                    ts: now,
+                    avgMs: avgMs,
+                    maxMs: maxMs,
+                    reqCount: dCount
+                });
+                if (this.latencyData.length > this.maxPoints) this.latencyData.shift();
+                this.hasLatencyData = true;
+            }
+        } else {
+            this.tokenData.push({ ts: now, promptPerSec: 0, completionPerSec: 0, totalTokens: 0 });
+            this.latencyData.push({ ts: now, avgMs: 0, maxMs: 0, reqCount: 0 });
+        }
+
+        this.prevMetrics = {
+            promptTokens: promptTokens,
+            completionTokens: completionTokens,
+            durationSum: durationSum,
+            durationCount: durationCount
+        };
+        this.prevTime = now;
+
+        this._updateTokenCounters();
+        this._updateLatencyCounters();
+        this._drawToken();
+        this._drawLatency();
+    } catch (_) {}
+};
+
+TokenLatencyChart.prototype._updateTokenCounters = function() {
+    var last = this.tokenData.length > 0 ? this.tokenData[this.tokenData.length - 1] : null;
+    var pps = last ? last.promptPerSec : 0;
+    var cps = last ? last.completionPerSec : 0;
+    var tot = last ? last.totalTokens : 0;
+
+    var elPps = document.getElementById('tk-prompt-ps');
+    var elCps = document.getElementById('tk-comp-ps');
+    var elTot = document.getElementById('tk-total');
+    if (elPps) elPps.textContent = pps < 1 ? pps.toFixed(1) : Math.round(pps);
+    if (elCps) elCps.textContent = cps < 1 ? cps.toFixed(1) : Math.round(cps);
+    if (elTot) elTot.textContent = formatNumber(tot);
+
+    var elWait = document.getElementById('tk-waiting');
+    if (elWait) elWait.style.display = this.hasTokenData ? 'none' : 'block';
+};
+
+TokenLatencyChart.prototype._updateLatencyCounters = function() {
+    var last = this.latencyData.length > 0 ? this.latencyData[this.latencyData.length - 1] : null;
+    var avg = last ? last.avgMs : 0;
+    var max = last ? last.maxMs : 0;
+    var cnt = last ? last.reqCount : 0;
+
+    var elAvg = document.getElementById('lt-avg');
+    var elMax = document.getElementById('lt-max');
+    var elCnt = document.getElementById('lt-count');
+    if (elAvg) elAvg.textContent = avg < 1 ? avg.toFixed(1) : Math.round(avg);
+    if (elMax) elMax.textContent = max < 1 ? max.toFixed(1) : Math.round(max);
+    if (elCnt) elCnt.textContent = cnt < 1 ? cnt.toFixed(1) : Math.round(cnt);
+
+    var elWait = document.getElementById('lt-waiting');
+    if (elWait) elWait.style.display = this.hasLatencyData ? 'none' : 'block';
+};
+
+TokenLatencyChart.prototype._drawGrid = function(ctx, w, h, pad) {
+    ctx.strokeStyle = getCSSVar('--chart-grid') || '#1a1a2e';
+    ctx.lineWidth = 0.5;
+    var gridRows = 4, gridCols = 6;
+    var chartH = h - pad.top - pad.bottom;
+    var chartW = w - pad.left - pad.right;
+    for (var gi = 0; gi <= gridRows; gi++) {
+        var gy = pad.top + (chartH / gridRows) * gi;
+        ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(w - pad.right, gy); ctx.stroke();
+    }
+    for (var gj = 0; gj <= gridCols; gj++) {
+        var gx = pad.left + (chartW / gridCols) * gj;
+        ctx.beginPath(); ctx.moveTo(gx, pad.top); ctx.lineTo(gx, h - pad.bottom); ctx.stroke();
+    }
+};
+
+TokenLatencyChart.prototype._drawYLabels = function(ctx, pad, h, maxVal, gridRows) {
+    var chartH = h - pad.top - pad.bottom;
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillStyle = getCSSVar('--chart-label') || '#4c4c60';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (var yi = 0; yi <= gridRows; yi++) {
+        var yVal = maxVal - (maxVal / gridRows) * yi;
+        var yPos = pad.top + (chartH / gridRows) * yi;
+        ctx.fillText(yVal < 1 ? yVal.toFixed(2) : yVal.toFixed(1), pad.left - 6, yPos);
+    }
+};
+
+TokenLatencyChart.prototype._drawXLabelsLive = function(ctx, w, h, pad) {
+    var chartW = w - pad.left - pad.right;
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillStyle = getCSSVar('--chart-label') || '#4c4c60';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    var labels = ['3m', '2m', '1m', 'now'];
+    for (var xi = 0; xi < labels.length; xi++) {
+        var xp = pad.left + (chartW / (labels.length - 1)) * xi;
+        ctx.fillText(labels[xi], xp, h - pad.bottom + 8);
+    }
+};
+
+TokenLatencyChart.prototype._drawPulseDot = function(ctx, px, py, color) {
+    var pulsePhase = (Date.now() % 1500) / 1500;
+    var pulseRadius = 3 + Math.sin(pulsePhase * Math.PI * 2) * 2;
+    var pulseAlpha = 0.6 + Math.sin(pulsePhase * Math.PI * 2) * 0.4;
+    ctx.beginPath(); ctx.arc(px, py, pulseRadius + 4, 0, Math.PI * 2);
+    ctx.fillStyle = color.replace('1)', (pulseAlpha * 0.2) + ')');
+    ctx.fill();
+    ctx.beginPath(); ctx.arc(px, py, pulseRadius, 0, Math.PI * 2);
+    ctx.fillStyle = color.replace('1)', pulseAlpha + ')');
+    ctx.fill();
+    ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+};
+
+TokenLatencyChart.prototype._drawToken = function() {
+    if (!this.tokenCtx || !this.tokenCanvas) return;
+    var canvas = this.tokenCanvas;
+    var ctx = this.tokenCtx;
+    var rect = canvas.parentElement.getBoundingClientRect();
+    var w = rect.width, h = rect.height;
+    var pad = { top: 16, right: 16, bottom: 28, left: 48 };
+    var chartW = w - pad.left - pad.right;
+    var chartH = h - pad.top - pad.bottom;
+
+    ctx.clearRect(0, 0, w, h);
+    this._drawGrid(ctx, w, h, pad);
+
+    if (this.tokenData.length < 2) return;
+
+    // Y scale
+    var maxVal = 0.1;
+    for (var di = 0; di < this.tokenData.length; di++) {
+        var sum = this.tokenData[di].promptPerSec + this.tokenData[di].completionPerSec;
+        if (sum > maxVal) maxVal = sum;
+    }
+    maxVal = maxVal * 1.2;
+
+    this._drawYLabels(ctx, pad, h, maxVal, 4);
+    this._drawXLabelsLive(ctx, w, h, pad);
+
+    var self = this;
+    function dataX(idx) { return pad.left + (idx / (self.maxPoints - 1)) * chartW; }
+    function dataY(val) { return pad.top + chartH - (val / maxVal) * chartH; }
+
+    // Stacked area: completion (gold) on top of prompt (blue)
+    // Draw prompt fill (blue, bottom layer)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(0));
+    for (var pi = 0; pi < this.tokenData.length; pi++) {
+        ctx.lineTo(dataX(pi), dataY(this.tokenData[pi].promptPerSec));
+    }
+    ctx.lineTo(dataX(this.tokenData.length - 1), dataY(0));
+    ctx.closePath();
+    var blueGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    blueGrad.addColorStop(0, 'rgba(96, 165, 250, 0.20)');
+    blueGrad.addColorStop(1, 'rgba(96, 165, 250, 0.02)');
+    ctx.fillStyle = blueGrad;
+    ctx.fill();
+
+    // Draw completion fill (gold, stacked on top)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(this.tokenData[0].promptPerSec));
+    for (var ci = 0; ci < this.tokenData.length; ci++) {
+        var stackTop = this.tokenData[ci].promptPerSec + this.tokenData[ci].completionPerSec;
+        ctx.lineTo(dataX(ci), dataY(stackTop));
+    }
+    // Return along prompt line
+    for (var ri = this.tokenData.length - 1; ri >= 0; ri--) {
+        ctx.lineTo(dataX(ri), dataY(this.tokenData[ri].promptPerSec));
+    }
+    ctx.closePath();
+    var goldGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    goldGrad.addColorStop(0, 'rgba(201, 168, 76, 0.22)');
+    goldGrad.addColorStop(1, 'rgba(201, 168, 76, 0.02)');
+    ctx.fillStyle = goldGrad;
+    ctx.fill();
+
+    // Prompt line (blue)
+    ctx.beginPath();
+    ctx.strokeStyle = getCSSVar('--blue') || '#60a5fa';
+    ctx.lineWidth = 1.8;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (var pli = 0; pli < this.tokenData.length; pli++) {
+        var plx = dataX(pli), ply = dataY(this.tokenData[pli].promptPerSec);
+        if (pli === 0) ctx.moveTo(plx, ply); else ctx.lineTo(plx, ply);
+    }
+    ctx.stroke();
+
+    // Completion line (gold)
+    ctx.beginPath();
+    ctx.strokeStyle = getCSSVar('--gold') || '#c9a84c';
+    ctx.lineWidth = 1.8;
+    for (var cli = 0; cli < this.tokenData.length; cli++) {
+        var clx = dataX(cli);
+        var cly = dataY(this.tokenData[cli].promptPerSec + this.tokenData[cli].completionPerSec);
+        if (cli === 0) ctx.moveTo(clx, cly); else ctx.lineTo(clx, cly);
+    }
+    ctx.stroke();
+
+    // Pulse dot on completion (top of stack)
+    var lastTk = this.tokenData[this.tokenData.length - 1];
+    var dotX = dataX(this.tokenData.length - 1);
+    var dotY = dataY(lastTk.promptPerSec + lastTk.completionPerSec);
+    this._drawPulseDot(ctx, dotX, dotY, 'rgba(201, 168, 76, 1)');
+
+    var chart = this;
+    if (this.timer) {
+        this.animFrame = requestAnimationFrame(function() { chart._drawToken(); chart._drawLatency(); });
+    }
+};
+
+TokenLatencyChart.prototype._drawLatency = function() {
+    if (!this.latencyCtx || !this.latencyCanvas) return;
+    var canvas = this.latencyCanvas;
+    var ctx = this.latencyCtx;
+    var rect = canvas.parentElement.getBoundingClientRect();
+    var w = rect.width, h = rect.height;
+    var pad = { top: 16, right: 16, bottom: 28, left: 48 };
+    var chartW = w - pad.left - pad.right;
+    var chartH = h - pad.top - pad.bottom;
+
+    ctx.clearRect(0, 0, w, h);
+    this._drawGrid(ctx, w, h, pad);
+
+    if (this.latencyData.length < 2) return;
+
+    // Y scale (ms)
+    var maxVal = 10;
+    for (var di = 0; di < this.latencyData.length; di++) {
+        if (this.latencyData[di].maxMs > maxVal) maxVal = this.latencyData[di].maxMs;
+        if (this.latencyData[di].avgMs > maxVal) maxVal = this.latencyData[di].avgMs;
+    }
+    maxVal = maxVal * 1.2;
+
+    // Y labels (ms)
+    var chartHInner = h - pad.top - pad.bottom;
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillStyle = getCSSVar('--chart-label') || '#4c4c60';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (var yi = 0; yi <= 4; yi++) {
+        var yVal = maxVal - (maxVal / 4) * yi;
+        var yPos = pad.top + (chartHInner / 4) * yi;
+        ctx.fillText(yVal < 10 ? yVal.toFixed(1) : Math.round(yVal) + '', pad.left - 6, yPos);
+    }
+
+    this._drawXLabelsLive(ctx, w, h, pad);
+
+    var self = this;
+    function dataX(idx) { return pad.left + (idx / (self.maxPoints - 1)) * chartW; }
+    function dataY(val) { return pad.top + chartH - (val / maxVal) * chartH; }
+
+    // Max latency area fill (translucent red)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(0));
+    for (var mi = 0; mi < this.latencyData.length; mi++) {
+        ctx.lineTo(dataX(mi), dataY(this.latencyData[mi].maxMs));
+    }
+    ctx.lineTo(dataX(this.latencyData.length - 1), dataY(0));
+    ctx.closePath();
+    var redGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    redGrad.addColorStop(0, 'rgba(239, 68, 68, 0.12)');
+    redGrad.addColorStop(1, 'rgba(239, 68, 68, 0.01)');
+    ctx.fillStyle = redGrad;
+    ctx.fill();
+
+    // Max latency line (faint red)
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(239, 68, 68, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    for (var mli = 0; mli < this.latencyData.length; mli++) {
+        var mlx = dataX(mli), mly = dataY(this.latencyData[mli].maxMs);
+        if (mli === 0) ctx.moveTo(mlx, mly); else ctx.lineTo(mlx, mly);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Avg latency area fill (gold)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(0));
+    for (var ai = 0; ai < this.latencyData.length; ai++) {
+        ctx.lineTo(dataX(ai), dataY(this.latencyData[ai].avgMs));
+    }
+    ctx.lineTo(dataX(this.latencyData.length - 1), dataY(0));
+    ctx.closePath();
+    var goldGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    goldGrad.addColorStop(0, 'rgba(201, 168, 76, 0.16)');
+    goldGrad.addColorStop(1, 'rgba(201, 168, 76, 0.01)');
+    ctx.fillStyle = goldGrad;
+    ctx.fill();
+
+    // Avg latency line (gold, solid)
+    ctx.beginPath();
+    ctx.strokeStyle = getCSSVar('--gold') || '#c9a84c';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (var ali = 0; ali < this.latencyData.length; ali++) {
+        var alx = dataX(ali), aly = dataY(this.latencyData[ali].avgMs);
+        if (ali === 0) ctx.moveTo(alx, aly); else ctx.lineTo(alx, aly);
+    }
+    ctx.stroke();
+
+    // Pulse dot on avg latency
+    var lastLt = this.latencyData[this.latencyData.length - 1];
+    var px = dataX(this.latencyData.length - 1);
+    var py = dataY(lastLt.avgMs);
+    this._drawPulseDot(ctx, px, py, 'rgba(201, 168, 76, 1)');
+};
+
+TokenLatencyChart.prototype.destroy = function() {
+    this.stop();
+    this.tokenCanvas = null; this.latencyCanvas = null;
+    this.tokenCtx = null; this.latencyCtx = null;
+    this.tokenData = []; this.latencyData = [];
+    this.histData = null;
+};
+
+TokenLatencyChart.prototype.setRange = function(rangeKey) {
+    this.activeRange = rangeKey;
+
+    // Update button states
+    var btns = document.querySelectorAll('.tl-range-btn');
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].classList.toggle('active', btns[i].dataset.range === rangeKey);
+    }
+
+    // Update titles
+    var tokenTitle = document.getElementById('tk-title');
+    var latencyTitle = document.getElementById('lt-title');
+    var tokenDot = document.getElementById('tk-live-dot');
+    var latencyDot = document.getElementById('lt-live-dot');
+    var tokenStatus = document.getElementById('tk-status');
+    var latencyStatus = document.getElementById('lt-status');
+    var rangeLabels = { 'current': 'Live', '1h': '1 Hour', '24h': '24 Hours', '7d': '7 Days', '30d': '1 Month' };
+    var suffix = rangeLabels[rangeKey] || '';
+    if (tokenTitle) tokenTitle.textContent = rangeKey === 'current' ? 'Live Token Usage' : 'Token Usage \u2014 ' + suffix;
+    if (latencyTitle) latencyTitle.textContent = rangeKey === 'current' ? 'Live Latency' : 'Latency \u2014 ' + suffix;
+    if (tokenDot) tokenDot.style.display = rangeKey === 'current' ? '' : 'none';
+    if (latencyDot) latencyDot.style.display = rangeKey === 'current' ? '' : 'none';
+
+    // Toggle counters vs summary
+    var tkLive = document.getElementById('tk-live-counters');
+    var tkHist = document.getElementById('tk-hist-summary');
+    var ltLive = document.getElementById('lt-live-counters');
+    var ltHist = document.getElementById('lt-hist-summary');
+    if (tkLive) tkLive.style.display = rangeKey === 'current' ? '' : 'none';
+    if (tkHist) tkHist.style.display = rangeKey === 'current' ? 'none' : '';
+    if (ltLive) ltLive.style.display = rangeKey === 'current' ? '' : 'none';
+    if (ltHist) ltHist.style.display = rangeKey === 'current' ? 'none' : '';
+
+    if (rangeKey === 'current') {
+        this.histData = null;
+        if (tokenStatus) tokenStatus.textContent = 'initializing';
+        if (latencyStatus) latencyStatus.textContent = 'initializing';
+        this.start();
+    } else {
+        this.stop();
+        this.histData = null;
+        if (tokenStatus) tokenStatus.textContent = 'loading\u2026';
+        if (latencyStatus) latencyStatus.textContent = 'loading\u2026';
+        var self = this;
+        fetch(API + '/token-latency?range=' + rangeKey)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                self.histData = data;
+                self.tokenCanvas = document.getElementById(self.tokenCanvasId);
+                self.latencyCanvas = document.getElementById(self.latencyCanvasId);
+                if (self.tokenCanvas) self.tokenCtx = self.tokenCanvas.getContext('2d');
+                if (self.latencyCanvas) self.latencyCtx = self.latencyCanvas.getContext('2d');
+                self._resize();
+                self._drawHistoricalToken();
+                self._drawHistoricalLatency();
+                self._updateHistSummaries(data);
+                var pts = (data.buckets || []).length;
+                if (tokenStatus) tokenStatus.textContent = pts + ' data points';
+                if (latencyStatus) latencyStatus.textContent = pts + ' data points';
+                var tkW = document.getElementById('tk-waiting');
+                var ltW = document.getElementById('lt-waiting');
+                if (tkW) tkW.style.display = pts > 0 ? 'none' : 'block';
+                if (ltW) ltW.style.display = pts > 0 ? 'none' : 'block';
+            })
+            .catch(function() {
+                if (tokenStatus) tokenStatus.textContent = 'error loading data';
+                if (latencyStatus) latencyStatus.textContent = 'error loading data';
+            });
+    }
+};
+
+TokenLatencyChart.prototype._updateHistSummaries = function(data) {
+    var buckets = data.buckets || [];
+    var totPrompt = 0, totComp = 0, totTokens = 0, totAvg = 0, maxLatency = 0, totReqs = 0;
+    for (var i = 0; i < buckets.length; i++) {
+        totPrompt += buckets[i].prompt_tokens;
+        totComp += buckets[i].completion_tokens;
+        totTokens += buckets[i].total_tokens;
+        totAvg += buckets[i].avg_latency_ms * buckets[i].request_count;
+        if (buckets[i].max_latency_ms > maxLatency) maxLatency = buckets[i].max_latency_ms;
+        totReqs += buckets[i].request_count;
+    }
+    var avgLatency = totReqs > 0 ? totAvg / totReqs : 0;
+    var rangeLabels = { '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days' };
+
+    var elTkPrompt = document.getElementById('tk-hist-prompt');
+    var elTkComp = document.getElementById('tk-hist-comp');
+    var elTkTotal = document.getElementById('tk-hist-total');
+    if (elTkPrompt) elTkPrompt.textContent = formatNumber(totPrompt);
+    if (elTkComp) elTkComp.textContent = formatNumber(totComp);
+    if (elTkTotal) elTkTotal.textContent = formatNumber(totTokens);
+
+    var elLtAvg = document.getElementById('lt-hist-avg');
+    var elLtMax = document.getElementById('lt-hist-max');
+    var elLtReqs = document.getElementById('lt-hist-reqs');
+    if (elLtAvg) elLtAvg.textContent = avgLatency < 1 ? avgLatency.toFixed(1) : Math.round(avgLatency) + ' ms';
+    if (elLtMax) elLtMax.textContent = maxLatency < 1 ? maxLatency.toFixed(1) : Math.round(maxLatency) + ' ms';
+    if (elLtReqs) elLtReqs.textContent = formatNumber(totReqs);
+};
+
+TokenLatencyChart.prototype._drawHistXLabels = function(ctx, w, h, pad, buckets, range) {
+    var chartW = w - pad.left - pad.right;
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillStyle = getCSSVar('--chart-label') || '#4c4c60';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    var labelCount = Math.min(6, buckets.length);
+    for (var xi = 0; xi < labelCount; xi++) {
+        var bucketIdx = Math.round(xi * (buckets.length - 1) / (labelCount - 1));
+        var xp = pad.left + (bucketIdx / (buckets.length - 1)) * chartW;
+        var t = buckets[bucketIdx].t;
+        var label = '';
+        if (range === '1h' || range === '24h') label = t.substring(11, 16);
+        else if (range === '7d') label = t.substring(5, 10).replace('-', '/') + ' ' + t.substring(11, 13) + 'h';
+        else label = t.substring(5, 10).replace('-', '/');
+        ctx.fillText(label, xp, h - pad.bottom + 8);
+    }
+};
+
+TokenLatencyChart.prototype._drawHistoricalToken = function() {
+    if (!this.tokenCtx || !this.tokenCanvas || !this.histData) return;
+    var buckets = this.histData.buckets || [];
+    var canvas = this.tokenCanvas;
+    var ctx = this.tokenCtx;
+    var rect = canvas.parentElement.getBoundingClientRect();
+    var w = rect.width, h = rect.height;
+    var pad = { top: 16, right: 16, bottom: 28, left: 48 };
+    var chartW = w - pad.left - pad.right;
+    var chartH = h - pad.top - pad.bottom;
+
+    ctx.clearRect(0, 0, w, h);
+    this._drawGrid(ctx, w, h, pad);
+    if (buckets.length < 2) return;
+
+    // Y scale (stacked: prompt + completion)
+    var maxVal = 1;
+    for (var di = 0; di < buckets.length; di++) {
+        var sum = buckets[di].prompt_tokens + buckets[di].completion_tokens;
+        if (sum > maxVal) maxVal = sum;
+    }
+    maxVal = maxVal * 1.2;
+
+    this._drawYLabels(ctx, pad, h, maxVal, 4);
+    this._drawHistXLabels(ctx, w, h, pad, buckets, this.activeRange);
+
+    function dataX(idx) { return pad.left + (idx / (buckets.length - 1)) * chartW; }
+    function dataY(val) { return pad.top + chartH - (val / maxVal) * chartH; }
+
+    // Prompt fill (blue)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(0));
+    for (var pi = 0; pi < buckets.length; pi++) ctx.lineTo(dataX(pi), dataY(buckets[pi].prompt_tokens));
+    ctx.lineTo(dataX(buckets.length - 1), dataY(0));
+    ctx.closePath();
+    var blueGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    blueGrad.addColorStop(0, 'rgba(96, 165, 250, 0.20)');
+    blueGrad.addColorStop(1, 'rgba(96, 165, 250, 0.02)');
+    ctx.fillStyle = blueGrad;
+    ctx.fill();
+
+    // Completion fill (gold, stacked)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(buckets[0].prompt_tokens));
+    for (var ci = 0; ci < buckets.length; ci++) {
+        ctx.lineTo(dataX(ci), dataY(buckets[ci].prompt_tokens + buckets[ci].completion_tokens));
+    }
+    for (var ri = buckets.length - 1; ri >= 0; ri--) {
+        ctx.lineTo(dataX(ri), dataY(buckets[ri].prompt_tokens));
+    }
+    ctx.closePath();
+    var goldGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    goldGrad.addColorStop(0, 'rgba(201, 168, 76, 0.22)');
+    goldGrad.addColorStop(1, 'rgba(201, 168, 76, 0.02)');
+    ctx.fillStyle = goldGrad;
+    ctx.fill();
+
+    // Lines
+    ctx.beginPath(); ctx.strokeStyle = getCSSVar('--blue') || '#60a5fa'; ctx.lineWidth = 1.8;
+    for (var pli = 0; pli < buckets.length; pli++) {
+        var plx = dataX(pli), ply = dataY(buckets[pli].prompt_tokens);
+        if (pli === 0) ctx.moveTo(plx, ply); else ctx.lineTo(plx, ply);
+    }
+    ctx.stroke();
+
+    ctx.beginPath(); ctx.strokeStyle = getCSSVar('--gold') || '#c9a84c'; ctx.lineWidth = 1.8;
+    for (var cli = 0; cli < buckets.length; cli++) {
+        var clx = dataX(cli), cly = dataY(buckets[cli].prompt_tokens + buckets[cli].completion_tokens);
+        if (cli === 0) ctx.moveTo(clx, cly); else ctx.lineTo(clx, cly);
+    }
+    ctx.stroke();
+};
+
+TokenLatencyChart.prototype._drawHistoricalLatency = function() {
+    if (!this.latencyCtx || !this.latencyCanvas || !this.histData) return;
+    var buckets = this.histData.buckets || [];
+    var canvas = this.latencyCanvas;
+    var ctx = this.latencyCtx;
+    var rect = canvas.parentElement.getBoundingClientRect();
+    var w = rect.width, h = rect.height;
+    var pad = { top: 16, right: 16, bottom: 28, left: 48 };
+    var chartW = w - pad.left - pad.right;
+    var chartH = h - pad.top - pad.bottom;
+
+    ctx.clearRect(0, 0, w, h);
+    this._drawGrid(ctx, w, h, pad);
+    if (buckets.length < 2) return;
+
+    // Y scale (ms)
+    var maxVal = 10;
+    for (var di = 0; di < buckets.length; di++) {
+        if (buckets[di].max_latency_ms > maxVal) maxVal = buckets[di].max_latency_ms;
+        if (buckets[di].avg_latency_ms > maxVal) maxVal = buckets[di].avg_latency_ms;
+    }
+    maxVal = maxVal * 1.2;
+
+    // Y labels
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillStyle = getCSSVar('--chart-label') || '#4c4c60';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (var yi = 0; yi <= 4; yi++) {
+        var yVal = maxVal - (maxVal / 4) * yi;
+        var yPos = pad.top + (chartH / 4) * yi;
+        ctx.fillText(yVal < 10 ? yVal.toFixed(1) : Math.round(yVal) + '', pad.left - 6, yPos);
+    }
+
+    this._drawHistXLabels(ctx, w, h, pad, buckets, this.activeRange);
+
+    function dataX(idx) { return pad.left + (idx / (buckets.length - 1)) * chartW; }
+    function dataY(val) { return pad.top + chartH - (val / maxVal) * chartH; }
+
+    // Max latency fill (red)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(0));
+    for (var mi = 0; mi < buckets.length; mi++) ctx.lineTo(dataX(mi), dataY(buckets[mi].max_latency_ms));
+    ctx.lineTo(dataX(buckets.length - 1), dataY(0));
+    ctx.closePath();
+    var redGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    redGrad.addColorStop(0, 'rgba(239, 68, 68, 0.12)');
+    redGrad.addColorStop(1, 'rgba(239, 68, 68, 0.01)');
+    ctx.fillStyle = redGrad;
+    ctx.fill();
+
+    // Max latency line (dashed red)
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(239, 68, 68, 0.4)';
+    ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    for (var mli = 0; mli < buckets.length; mli++) {
+        var mlx = dataX(mli), mly = dataY(buckets[mli].max_latency_ms);
+        if (mli === 0) ctx.moveTo(mlx, mly); else ctx.lineTo(mlx, mly);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+
+    // Avg latency fill (gold)
+    ctx.beginPath();
+    ctx.moveTo(dataX(0), dataY(0));
+    for (var ai = 0; ai < buckets.length; ai++) ctx.lineTo(dataX(ai), dataY(buckets[ai].avg_latency_ms));
+    ctx.lineTo(dataX(buckets.length - 1), dataY(0));
+    ctx.closePath();
+    var goldGrad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+    goldGrad.addColorStop(0, 'rgba(201, 168, 76, 0.16)');
+    goldGrad.addColorStop(1, 'rgba(201, 168, 76, 0.01)');
+    ctx.fillStyle = goldGrad;
+    ctx.fill();
+
+    // Avg latency line (gold, solid)
+    ctx.beginPath();
+    ctx.strokeStyle = getCSSVar('--gold') || '#c9a84c';
+    ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (var ali = 0; ali < buckets.length; ali++) {
+        var alx = dataX(ali), aly = dataY(buckets[ali].avg_latency_ms);
+        if (ali === 0) ctx.moveTo(alx, aly); else ctx.lineTo(alx, aly);
+    }
+    ctx.stroke();
 };
 
 // ─── View: Overview ──────────────────────────────────────────────
@@ -463,11 +1425,57 @@ async function renderOverview() {
         statCard(health.enforcement_mode || '-', 'Enforcement', health.storage ? esc(health.storage.backend) + ' storage' : '') +
     '</div>';
 
+    // Governance Status card
+    html += '<div class="compliance-card">' +
+        '<div class="card-head"><span class="card-title">Governance Status</span></div>' +
+        '<div class="compliance-grid">' +
+            '<div class="compliance-item">' +
+                '<div class="compliance-label">Enforcement</div>' +
+                '<div class="compliance-value">' +
+                    (health.enforcement_mode === 'enforced'
+                        ? '<span class="badge badge-enforced">enforced</span>'
+                        : '<span class="badge badge-warn">' + esc(health.enforcement_mode || 'unknown') + '</span>') +
+                '</div>' +
+            '</div>' +
+            '<div class="compliance-item">' +
+                '<div class="compliance-label">Policy Cache</div>' +
+                '<div class="compliance-value">' +
+                    (health.status === 'healthy' || health.status === 'degraded'
+                        ? '<span class="badge badge-pass">active</span>'
+                        : '<span class="badge badge-fail">stale</span>') +
+                '</div>' +
+            '</div>' +
+            '<div class="compliance-item">' +
+                '<div class="compliance-label">Content Analysis</div>' +
+                '<div class="compliance-value">' +
+                    (health.content_analyzers
+                        ? '<span class="badge badge-pass">' + health.content_analyzers + ' analyzer' + (health.content_analyzers !== 1 ? 's' : '') + '</span>'
+                        : '<span class="badge badge-muted">none</span>') +
+                '</div>' +
+            '</div>' +
+            '<div class="compliance-item">' +
+                '<div class="compliance-label">Session Chain</div>' +
+                '<div class="compliance-value">' +
+                    (health.session_chain
+                        ? '<span class="badge badge-pass">enabled</span>'
+                        : '<span class="badge badge-muted">disabled</span>') +
+                '</div>' +
+            '</div>' +
+        '</div>' +
+    '</div>';
+
     // Throughput chart
     html += '<div class="throughput-card">' +
         '<div class="throughput-header">' +
-            '<span class="throughput-title"><span class="throughput-live-dot"></span> Live Throughput</span>' +
+            '<span class="throughput-title"><span class="throughput-live-dot" id="tp-live-dot"></span> <span id="tp-title">Live Throughput</span></span>' +
             '<span class="throughput-status" id="tp-status">initializing</span>' +
+        '</div>' +
+        '<div class="throughput-range-bar">' +
+            '<button class="throughput-range-btn active" data-range="current">Current</button>' +
+            '<button class="throughput-range-btn" data-range="1h">1 Hour</button>' +
+            '<button class="throughput-range-btn" data-range="24h">24 Hours</button>' +
+            '<button class="throughput-range-btn" data-range="7d">7 Days</button>' +
+            '<button class="throughput-range-btn" data-range="30d">1 Month</button>' +
         '</div>' +
         '<div class="throughput-canvas-wrap">' +
             '<canvas id="tp-canvas"></canvas>' +
@@ -476,7 +1484,7 @@ async function renderOverview() {
                 '<div class="throughput-waiting-bar"></div>' +
             '</div>' +
         '</div>' +
-        '<div class="throughput-counters">' +
+        '<div class="throughput-counters" id="tp-live-counters">' +
             '<div class="throughput-counter">' +
                 '<div class="counter-value gold" id="tp-rps">0</div>' +
                 '<div class="counter-label">req/s</div>' +
@@ -494,7 +1502,129 @@ async function renderOverview() {
                 '<div class="counter-label">total</div>' +
             '</div>' +
         '</div>' +
+        '<div class="throughput-hist-summary" id="tp-hist-summary" style="display:none">' +
+            '<div class="throughput-counter">' +
+                '<div class="counter-value gold" id="tp-hist-total">0</div>' +
+                '<div class="counter-label">total requests</div>' +
+            '</div>' +
+            '<div class="throughput-counter">' +
+                '<div class="counter-value green" id="tp-hist-pct">100%</div>' +
+                '<div class="counter-label">allowed</div>' +
+            '</div>' +
+            '<div class="throughput-counter">' +
+                '<div class="counter-value" id="tp-hist-period">-</div>' +
+                '<div class="counter-label">period</div>' +
+            '</div>' +
+        '</div>' +
     '</div>';
+
+    // Token Usage + Latency charts (shared range bar)
+    html += '<div class="tl-charts-wrap">' +
+        '<div class="throughput-range-bar">' +
+            '<button class="throughput-range-btn tl-range-btn active" data-range="current">Current</button>' +
+            '<button class="throughput-range-btn tl-range-btn" data-range="1h">1 Hour</button>' +
+            '<button class="throughput-range-btn tl-range-btn" data-range="24h">24 Hours</button>' +
+            '<button class="throughput-range-btn tl-range-btn" data-range="7d">7 Days</button>' +
+            '<button class="throughput-range-btn tl-range-btn" data-range="30d">1 Month</button>' +
+        '</div>' +
+        '<div class="tl-charts-grid">' +
+
+        // Token Usage chart
+        '<div class="throughput-card tl-chart-card">' +
+            '<div class="throughput-header">' +
+                '<span class="throughput-title"><span class="throughput-live-dot" id="tk-live-dot"></span> <span id="tk-title">Live Token Usage</span></span>' +
+                '<span class="throughput-status" id="tk-status">initializing</span>' +
+            '</div>' +
+            '<div class="tl-legend">' +
+                '<span class="tl-legend-item"><span class="tl-legend-swatch tl-swatch-blue"></span>Prompt</span>' +
+                '<span class="tl-legend-item"><span class="tl-legend-swatch tl-swatch-gold"></span>Completion</span>' +
+            '</div>' +
+            '<div class="throughput-canvas-wrap">' +
+                '<canvas id="tk-canvas"></canvas>' +
+                '<div class="throughput-waiting" id="tk-waiting">' +
+                    '<div class="throughput-waiting-text">AWAITING TOKEN DATA</div>' +
+                    '<div class="throughput-waiting-bar"></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="throughput-counters" id="tk-live-counters">' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value" style="color:var(--blue)" id="tk-prompt-ps">0</div>' +
+                    '<div class="counter-label">prompt tok/s</div>' +
+                '</div>' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value gold" id="tk-comp-ps">0</div>' +
+                    '<div class="counter-label">completion tok/s</div>' +
+                '</div>' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value" id="tk-total">0</div>' +
+                    '<div class="counter-label">total tokens</div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="throughput-hist-summary" id="tk-hist-summary" style="display:none">' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value" style="color:var(--blue)" id="tk-hist-prompt">0</div>' +
+                    '<div class="counter-label">prompt tokens</div>' +
+                '</div>' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value gold" id="tk-hist-comp">0</div>' +
+                    '<div class="counter-label">completion tokens</div>' +
+                '</div>' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value" id="tk-hist-total">0</div>' +
+                    '<div class="counter-label">total</div>' +
+                '</div>' +
+            '</div>' +
+        '</div>' +
+
+        // Latency chart
+        '<div class="throughput-card tl-chart-card">' +
+            '<div class="throughput-header">' +
+                '<span class="throughput-title"><span class="throughput-live-dot" id="lt-live-dot"></span> <span id="lt-title">Live Latency</span></span>' +
+                '<span class="throughput-status" id="lt-status">initializing</span>' +
+            '</div>' +
+            '<div class="tl-legend">' +
+                '<span class="tl-legend-item"><span class="tl-legend-swatch tl-swatch-gold"></span>Avg ms</span>' +
+                '<span class="tl-legend-item"><span class="tl-legend-swatch tl-swatch-red"></span>Max ms</span>' +
+            '</div>' +
+            '<div class="throughput-canvas-wrap">' +
+                '<canvas id="lt-canvas"></canvas>' +
+                '<div class="throughput-waiting" id="lt-waiting">' +
+                    '<div class="throughput-waiting-text">AWAITING LATENCY DATA</div>' +
+                    '<div class="throughput-waiting-bar"></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="throughput-counters" id="lt-live-counters">' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value gold" id="lt-avg">0</div>' +
+                    '<div class="counter-label">avg ms</div>' +
+                '</div>' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value red" id="lt-max">0</div>' +
+                    '<div class="counter-label">max ms</div>' +
+                '</div>' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value" id="lt-count">0</div>' +
+                    '<div class="counter-label">requests</div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="throughput-hist-summary" id="lt-hist-summary" style="display:none">' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value gold" id="lt-hist-avg">0</div>' +
+                    '<div class="counter-label">avg latency</div>' +
+                '</div>' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value red" id="lt-hist-max">0</div>' +
+                    '<div class="counter-label">max latency</div>' +
+                '</div>' +
+                '<div class="throughput-counter">' +
+                    '<div class="counter-value" id="lt-hist-reqs">0</div>' +
+                    '<div class="counter-label">requests</div>' +
+                '</div>' +
+            '</div>' +
+        '</div>' +
+
+        '</div>' + // tl-charts-grid
+    '</div>'; // tl-charts-wrap
 
     // Recent Sessions
     html += '<div class="card"><div class="card-head">' +
@@ -549,6 +1679,27 @@ async function renderOverview() {
     if (_throughputChart) { _throughputChart.destroy(); _throughputChart = null; }
     _throughputChart = new ThroughputChart('tp-canvas');
     _throughputChart.start();
+
+    // Wire throughput range buttons (not .tl-range-btn)
+    var rangeBtns = document.querySelectorAll('.throughput-range-btn:not(.tl-range-btn)');
+    for (var rb = 0; rb < rangeBtns.length; rb++) {
+        rangeBtns[rb].addEventListener('click', function(e) {
+            if (_throughputChart) _throughputChart.setRange(this.dataset.range);
+        });
+    }
+
+    // Start token/latency charts
+    if (_tokenLatencyChart) { _tokenLatencyChart.destroy(); _tokenLatencyChart = null; }
+    _tokenLatencyChart = new TokenLatencyChart('tk-canvas', 'lt-canvas');
+    _tokenLatencyChart.start();
+
+    // Wire token/latency range buttons
+    var tlBtns = document.querySelectorAll('.tl-range-btn');
+    for (var tb = 0; tb < tlBtns.length; tb++) {
+        tlBtns[tb].addEventListener('click', function(e) {
+            if (_tokenLatencyChart) _tokenLatencyChart.setRange(this.dataset.range);
+        });
+    }
 }
 
 // ─── View: Sessions ──────────────────────────────────────────────
@@ -661,6 +1812,7 @@ async function renderTimeline(sessionId) {
                 '<div class="chain-response-line">' + (response ? '→ ' + esc(response) : '') + '</div>' +
                 '<div class="chain-foot">' +
                     policyBadge(r.policy_result) +
+                    (r.user ? '<span class="badge badge-identity" title="' + esc(r.team ? r.team + '/' + r.user : r.user) + '">' + esc(r.user) + '</span>' : '') +
                     (hasTools ? '<span class="badge badge-gold">&#9881; ' + toolNames.join(', ') + '</span>' : '') +
                     (tokens ? '<span class="chain-tokens">' + tokens + ' tokens</span>' : '') +
                     '<span class="chain-hash-preview">' + truncHash(r.record_hash, 20) + '</span>' +
@@ -707,7 +1859,10 @@ async function renderExecution(executionId, sessionId) {
             detailRow('Policy', r.policy_result, badgeClass(r.policy_result)) +
             detailRow('Policy Version', r.policy_version) +
             detailRow('Tenant', r.tenant_id) +
-            detailRow('User', r.user || '-') +
+            detailRow('User', r.user || (r.metadata && r.metadata.user) || '-') +
+            detailRow('Team', (r.metadata && r.metadata.team) || '-') +
+            detailRow('Roles', (r.metadata && r.metadata.caller_roles) ? r.metadata.caller_roles.join(', ') : '-') +
+            detailRow('Auth Source', (r.metadata && r.metadata.identity_source) || '-') +
             detailRow('Timestamp', formatTime(r.timestamp)) +
         '</div></div></div>';
 
@@ -916,7 +2071,7 @@ async function renderAttempts(params) {
 
     html += '<div class="card"><div class="card-head"><span class="card-title">Attempts</span></div>' +
         '<div class="table-wrap"><table><thead><tr>' +
-            '<th>Disposition</th><th>Model</th><th>Path</th><th>Status</th><th>Time</th>' +
+            '<th>Disposition</th><th>User</th><th>Model</th><th>Path</th><th>Status</th><th>Time</th>' +
         '</tr></thead><tbody>';
 
     for (var j = 0; j < items.length; j++) {
@@ -925,6 +2080,7 @@ async function renderAttempts(params) {
         html += '<tr class="' + (hasExec ? 'clickable' : '') + '"' +
             (hasExec ? ' data-nav="execution" data-eid="' + esc(a.execution_id) + '"' : '') + '>' +
             '<td>' + dispBadge(a.disposition) + '</td>' +
+            '<td class="mono" style="font-size:12px">' + esc(a.user || '-') + '</td>' +
             '<td class="model-name">' + esc(displayModel(a.model_id) || '-') + '</td>' +
             '<td class="mono" style="font-size:12px;color:var(--text-muted)">' + esc(a.path) + '</td>' +
             '<td><span class="badge ' + (a.status_code < 300 ? 'badge-pass' : a.status_code < 500 ? 'badge-warn' : 'badge-fail') + '">' + a.status_code + '</span></td>' +
@@ -1001,12 +2157,16 @@ async function verifyChain(sessionId) {
             nodeResults.push(nodeOk);
         }
 
-        // Animate nodes one-by-one
+        // Animate nodes one-by-one with glow effect
         var nodes = document.querySelectorAll('.chain-node');
         for (var n = 0; n < nodes.length && n < nodeResults.length; n++) {
             (function(node, ok, delay) {
                 setTimeout(function() {
                     node.setAttribute('data-verified', ok ? 'pass' : 'fail');
+                    var card = node.querySelector('.chain-card');
+                    if (card) {
+                        card.classList.add(ok ? 'chain-verified-pass' : 'chain-verified-fail');
+                    }
                 }, delay);
             })(nodes[n], nodeResults[n], n * 180);
         }
@@ -1390,7 +2550,10 @@ async function renderControlModels($el) {
     // Add model form toggle
     html += '<div class="card"><div class="card-head">' +
         '<span class="card-title">Model Attestations (' + attestations.length + ')</span>' +
-        '<button class="btn-primary btn-sm" id="toggle-add-model">+ Add Model</button>' +
+        '<div class="card-head-actions">' +
+            '<button class="btn-ghost btn-sm" id="btn-discover-models">&#9881; Discover Models</button>' +
+            '<button class="btn-primary btn-sm" id="toggle-add-model">+ Add Model</button>' +
+        '</div>' +
     '</div>';
 
     // Inline add form (hidden by default) — uses safe setHTML for rendering
@@ -1414,6 +2577,13 @@ async function renderControlModels($el) {
                 '<button class="btn-primary" id="am-submit">Register</button>' +
                 '<button class="btn-ghost" id="am-cancel">Cancel</button>' +
             '</div>' +
+        '</div></div>';
+
+    // Discovery panel (hidden, populated on demand)
+    html += '<div id="discovery-panel" style="display:none">' +
+        '<div class="inline-form">' +
+            '<div class="inline-form-title">&#9881; Discovered Models</div>' +
+            '<div id="discovery-content"><div class="discovery-loading">Scanning providers...</div></div>' +
         '</div></div>';
 
     if (!attestations.length && !Object.keys(modelCaps).length) {
@@ -1495,6 +2665,101 @@ async function renderControlModels($el) {
             navigate('control', { sub: 'models' });
         } catch (e) {
             if (e.message === 'AUTH') { renderControlAuth(); return; }
+        }
+    });
+
+    // Discovery button
+    document.getElementById('btn-discover-models').addEventListener('click', async function() {
+        var $panel = document.getElementById('discovery-panel');
+        var $dc = document.getElementById('discovery-content');
+        if ($panel.style.display !== 'none') {
+            $panel.style.display = 'none';
+            return;
+        }
+        $panel.style.display = 'block';
+        setHTML($dc, '<div class="discovery-loading">Scanning providers...</div>');
+        try {
+            var data = await fetchControlJSON(CTRL_API + '/discover');
+            var models = data.models || [];
+            if (!models.length) {
+                setHTML($dc, '<div class="empty-state"><p>No models found from configured providers.</p></div>');
+                return;
+            }
+            var unregistered = models.filter(function(m) { return !m.registered; });
+            var dhtml = '';
+            if (unregistered.length > 0) {
+                dhtml += '<div style="margin-bottom:12px;text-align:right">' +
+                    '<button class="btn-primary btn-sm" id="btn-register-all">Register All (' + unregistered.length + ')</button></div>';
+            }
+            dhtml += '<div class="table-wrap"><table><thead><tr>' +
+                '<th>Model ID</th><th>Provider</th><th>Source</th><th style="text-align:right">Action</th>' +
+            '</tr></thead><tbody>';
+            for (var i = 0; i < models.length; i++) {
+                var m = models[i];
+                dhtml += '<tr>' +
+                    '<td class="id">' + esc(m.model_id) + '</td>' +
+                    '<td class="mono">' + esc(m.provider) + '</td>' +
+                    '<td><span class="badge badge-muted">' + esc(m.source) + '</span></td>' +
+                    '<td style="text-align:right">';
+                if (m.registered) {
+                    dhtml += '<span class="badge badge-pass">Registered</span>';
+                } else {
+                    dhtml += '<button class="btn-primary btn-sm" data-action="register-discovered" data-mid="' +
+                        esc(m.model_id) + '" data-prov="' + esc(m.provider) + '">Register</button>';
+                }
+                dhtml += '</td></tr>';
+            }
+            dhtml += '</tbody></table></div>';
+            setHTML($dc, dhtml);
+
+            // Bind register buttons in discovery panel
+            $dc.querySelectorAll('[data-action="register-discovered"]').forEach(function(el) {
+                el.addEventListener('click', async function() {
+                    try {
+                        await controlFetch(CTRL_API + '/attestations', {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                model_id: el.dataset.mid,
+                                provider: el.dataset.prov,
+                                status: 'active',
+                                notes: 'Registered via provider discovery'
+                            })
+                        });
+                        navigate('control', { sub: 'models' });
+                    } catch (e) { if (e.message === 'AUTH') renderControlAuth(); }
+                });
+            });
+
+            // Register All button
+            var $regAll = document.getElementById('btn-register-all');
+            if ($regAll) {
+                $regAll.addEventListener('click', async function() {
+                    $regAll.disabled = true;
+                    $regAll.textContent = 'Registering...';
+                    try {
+                        for (var j = 0; j < models.length; j++) {
+                            if (!models[j].registered) {
+                                await controlFetch(CTRL_API + '/attestations', {
+                                    method: 'POST',
+                                    body: JSON.stringify({
+                                        model_id: models[j].model_id,
+                                        provider: models[j].provider,
+                                        status: 'active',
+                                        notes: 'Registered via provider discovery'
+                                    })
+                                });
+                            }
+                        }
+                        navigate('control', { sub: 'models' });
+                    } catch (e) {
+                        if (e.message === 'AUTH') renderControlAuth();
+                        else { $regAll.disabled = false; $regAll.textContent = 'Register All'; }
+                    }
+                });
+            }
+        } catch (e) {
+            if (e.message === 'AUTH') { renderControlAuth(); return; }
+            setHTML($dc, '<div class="empty-state"><p>Discovery failed: ' + esc(e.message) + '</p></div>');
         }
     });
 
@@ -1877,6 +3142,49 @@ async function renderControlStatus($el) {
                 '<td><span class="badge ' + (st ? 'badge-pass' : 'badge-muted') + '">' + (st ? 'yes' : 'no') + '</span></td></tr>';
         }
         html += '</tbody></table></div></div>';
+    }
+
+    // Auth & Security
+    html += '<div class="card"><div class="status-card-header"><span class="icon">&#9670;</span> Auth &amp; Security</div>' +
+        '<div class="detail-grid">' +
+            detailRow('Auth Mode', status.auth_mode || 'api_key') +
+            detailRow('JWT Configured', status.jwt_configured ? 'yes' : 'no');
+    if (status.content_analyzers) {
+        html += detailRow('Content Analyzers', status.content_analyzers.count) +
+            detailRow('Analyzer Types', status.content_analyzers.types.join(', '));
+    } else {
+        html += detailRow('Content Analyzers', '0');
+    }
+    html += detailRow('Lineage', status.lineage_enabled ? 'enabled' : 'disabled') +
+        '</div></div>';
+
+    // Providers
+    var provs = status.providers || [];
+    if (provs.length > 0) {
+        html += '<div class="card"><div class="status-card-header"><span class="icon">&#9670;</span> Configured Providers</div>' +
+            '<div class="table-wrap"><table><thead><tr><th>Provider</th><th>URL</th></tr></thead><tbody>';
+        for (var p = 0; p < provs.length; p++) {
+            html += '<tr><td class="mono">' + esc(provs[p].name) + '</td>' +
+                '<td class="mono" style="font-size:12px">' + esc(provs[p].url) + '</td></tr>';
+        }
+        html += '</tbody></table></div></div>';
+    }
+
+    // Session chain & Budget
+    if (status.session_chain || status.token_budget) {
+        html += '<div class="card"><div class="status-card-header"><span class="icon">&#9670;</span> Runtime State</div>' +
+            '<div class="detail-grid">';
+        if (status.session_chain) {
+            html += detailRow('Active Sessions', status.session_chain.active_sessions);
+        }
+        if (status.token_budget) {
+            html += detailRow('Tokens Used', formatNumber(status.token_budget.tokens_used || 0)) +
+                detailRow('Max Tokens', formatNumber(status.token_budget.max_tokens || 0));
+        }
+        if (status.model_routes_count != null) {
+            html += detailRow('Model Routes', status.model_routes_count);
+        }
+        html += '</div></div>';
     }
 
     // Health overview

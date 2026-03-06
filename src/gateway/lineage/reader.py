@@ -51,7 +51,8 @@ class LineageReader:
                 COUNT(*) AS record_count,
                 MAX(json_extract(record_json, '$.timestamp')) AS last_activity,
                 COALESCE(json_extract(record_json, '$.model_id'),
-                         json_extract(record_json, '$.model_attestation_id')) AS model
+                         json_extract(record_json, '$.model_attestation_id')) AS model,
+                json_extract(record_json, '$.user') AS user
             FROM wal_records
             WHERE json_extract(record_json, '$.session_id') IS NOT NULL
               AND json_extract(record_json, '$.event_type') IS NULL
@@ -117,7 +118,7 @@ class LineageReader:
         cur = conn.execute(
             """
             SELECT request_id, timestamp, tenant_id, provider, model_id,
-                   path, disposition, execution_id, status_code
+                   path, disposition, execution_id, status_code, user
             FROM gateway_attempts
             ORDER BY timestamp DESC
             LIMIT ? OFFSET ?
@@ -135,6 +136,81 @@ class LineageReader:
         total = total_cur.fetchone()["total"]
 
         return {"items": items, "stats": stats, "total": total}
+
+    _RANGE_CONFIG: dict[str, tuple[str, str]] = {
+        # range_key -> (lookback SQL interval, strftime bucket format)
+        "1h":  ("-1 hour",  "%Y-%m-%dT%H:%M:00"),   # 1-minute buckets
+        "24h": ("-24 hours", "%Y-%m-%dT%H:00:00"),    # 1-hour buckets (show mins as 00)
+        "7d":  ("-7 days",  "%Y-%m-%dT%H:00:00"),     # 1-hour buckets
+        "30d": ("-30 days", "%Y-%m-%dT%H:00:00"),     # 1-hour buckets (aggregated client-side if needed)
+    }
+
+    def get_metrics_history(self, range_key: str) -> dict:
+        """Return time-bucketed attempt counts for charting.
+
+        range_key: "1h" | "24h" | "7d" | "30d"
+        Returns: {buckets: [{t, total, allowed, blocked}], range: str}
+        """
+        if range_key not in self._RANGE_CONFIG:
+            range_key = "1h"
+        lookback, fmt = self._RANGE_CONFIG[range_key]
+        conn = self._ensure_conn()
+        cur = conn.execute(
+            f"""
+            SELECT
+                strftime('{fmt}', timestamp) AS t,
+                COUNT(*) AS total,
+                SUM(CASE WHEN disposition = 'forwarded' THEN 1 ELSE 0 END) AS allowed,
+                SUM(CASE WHEN disposition != 'forwarded' THEN 1 ELSE 0 END) AS blocked
+            FROM gateway_attempts
+            WHERE timestamp >= datetime('now', '{lookback}')
+            GROUP BY t
+            ORDER BY t ASC
+            """,
+        )
+        buckets = [{"t": row["t"], "total": row["total"], "allowed": row["allowed"], "blocked": row["blocked"]} for row in cur.fetchall()]
+        return {"buckets": buckets, "range": range_key}
+
+    def get_token_latency_history(self, range_key: str) -> dict:
+        """Return time-bucketed token usage and latency aggregates for charting.
+
+        Returns: {buckets: [{t, prompt_tokens, completion_tokens, total_tokens,
+                             avg_latency_ms, max_latency_ms, request_count}], range: str}
+        """
+        if range_key not in self._RANGE_CONFIG:
+            range_key = "1h"
+        lookback, fmt = self._RANGE_CONFIG[range_key]
+        conn = self._ensure_conn()
+        cur = conn.execute(
+            f"""
+            SELECT
+                strftime('{fmt}', json_extract(record_json, '$.timestamp')) AS t,
+                COALESCE(SUM(json_extract(record_json, '$.prompt_tokens')), 0) AS prompt_tokens,
+                COALESCE(SUM(json_extract(record_json, '$.completion_tokens')), 0) AS completion_tokens,
+                COALESCE(SUM(json_extract(record_json, '$.total_tokens')), 0) AS total_tokens,
+                COALESCE(AVG(json_extract(record_json, '$.latency_ms')), 0) AS avg_latency_ms,
+                COALESCE(MAX(json_extract(record_json, '$.latency_ms')), 0) AS max_latency_ms,
+                COUNT(*) AS request_count
+            FROM wal_records
+            WHERE json_extract(record_json, '$.timestamp') >= datetime('now', '{lookback}')
+              AND (json_extract(record_json, '$.event_type') IS NULL
+                   OR json_extract(record_json, '$.event_type') = '')
+            GROUP BY t
+            ORDER BY t ASC
+            """,
+        )
+        buckets = []
+        for row in cur.fetchall():
+            buckets.append({
+                "t": row["t"],
+                "prompt_tokens": row["prompt_tokens"],
+                "completion_tokens": row["completion_tokens"],
+                "total_tokens": row["total_tokens"],
+                "avg_latency_ms": round(row["avg_latency_ms"], 1),
+                "max_latency_ms": round(row["max_latency_ms"], 1),
+                "request_count": row["request_count"],
+            })
+        return {"buckets": buckets, "range": range_key}
 
     def verify_chain(self, session_id: str) -> dict:
         """Verify Merkle chain integrity for a session.

@@ -261,6 +261,8 @@ p {
 .ac-4 .arch-cap-dot { background: var(--navy); }
 .ac-5 { background: var(--amber-light); border-color: #fcd34d; color: var(--amber); }
 .ac-5 .arch-cap-dot { background: var(--amber); }
+.ac-6 { background: var(--teal-light); border-color: #81cdc9; color: var(--teal); }
+.ac-6 .arch-cap-dot { background: var(--teal); }
 
 .arch-audit {
   text-align: center;
@@ -372,7 +374,7 @@ p {
   border-radius: 4px 4px 0 0;
 }
 .comp-table td {
-  padding: 5px 8px;
+  padding: 3px 7px;
   border-bottom: 1px solid var(--warm-3);
   vertical-align: top;
 }
@@ -480,11 +482,11 @@ p {
 }
 .diff-card li {
   font-size: 8.5px;
-  padding: 2px 0;
+  padding: 1px 0;
   color: var(--ink-2);
   display: flex;
   gap: 4px;
-  line-height: 1.4;
+  line-height: 1.35;
 }
 .diff-card li span {
   flex-shrink: 0;
@@ -575,6 +577,7 @@ p {
       <div class="arch-gateway">
         <div class="arch-gw-title">Walacor Gateway</div>
         <div class="arch-gw-caps">
+          <div class="arch-cap ac-6"><div class="arch-cap-dot"></div>Authenticate Callers (JWT/SSO)</div>
           <div class="arch-cap ac-1"><div class="arch-cap-dot"></div>Verify Model Identity</div>
           <div class="arch-cap ac-2"><div class="arch-cap-dot"></div>Enforce Security Policies</div>
           <div class="arch-cap ac-3"><div class="arch-cap-dot"></div>Scan for Unsafe Content</div>
@@ -591,7 +594,7 @@ p {
     </div>
     <div class="arch-audit">
       <div class="arch-audit-arrow">&darr;</div>
-      <div class="arch-audit-box">Tamper-Proof Audit Trail &middot; SHA3-512 Session Chain</div>
+      <div class="arch-audit-box">Tamper-Proof Audit Trail &middot; SHA3-512 Session Chain &middot; Live Dashboard</div>
     </div>
   </div>
 
@@ -666,7 +669,7 @@ p {
         <div class="flow-num">4</div>
         <div class="flow-body">
           <div class="flow-title">Scan the Response</div>
-          <div class="flow-desc">Three independent analyzers run in parallel: PII detection, toxicity scoring, and Llama Guard safety classification.</div>
+          <div class="flow-desc">Three independent analyzers run in parallel: PII detection (severity-tiered), toxicity scoring, and Llama Guard safety classification. Works on thinking model reasoning content too.</div>
         </div>
         <div class="flow-badge fb-purple">3 analyzers</div>
       </div>
@@ -695,7 +698,7 @@ p {
     <div>
       <h3>Completeness Guarantee</h3>
       <p class="small">The completeness middleware wraps the entire pipeline in a <code>try/finally</code> block. Whether a request succeeds, fails, gets denied by policy, or drops mid-stream &mdash; an attempt record is always written. This means your audit trail has <span class="strong">zero gaps</span>. Every request that touched the gateway is accounted for.</p>
-      <p class="small">Execution records contain the full prompt, full response, model identity, content analysis verdicts, policy decisions, token usage, and session chain hashes. Attempt records capture request metadata even when the request never reaches a model.</p>
+      <p class="small">Execution records contain the full prompt, full response, model identity, content analysis verdicts, policy decisions, token counts, latency, and session chain hashes. <span class="strong">Caller identity</span> (user ID, team, roles) is resolved from JWT claims or headers and attached to every record &mdash; answering "who asked this?" for every interaction.</p>
     </div>
     <div>
       <h3>Session Chain Integrity</h3>
@@ -818,6 +821,34 @@ p {
         <td class="partial">~ Sampling</td>
         <td class="partial">~ Inline only</td>
       </tr>
+      <tr>
+        <td class="feat">Built-in observability dashboard</td>
+        <td class="us-col yes"><span class="check">&check;</span> Live + historical charts</td>
+        <td class="no">&times; External required</td>
+        <td class="yes"><span class="check">&check;</span> Core feature</td>
+        <td class="no">&times; Not offered</td>
+      </tr>
+      <tr>
+        <td class="feat">Enterprise SSO / JWT auth</td>
+        <td class="us-col yes"><span class="check">&check;</span> HS256 / RS256 / ES256</td>
+        <td class="partial">~ API keys only</td>
+        <td class="yes"><span class="check">&check;</span> Usually</td>
+        <td class="partial">~ Varies</td>
+      </tr>
+      <tr>
+        <td class="feat">Self-service control plane</td>
+        <td class="us-col yes"><span class="check">&check;</span> Built-in UI + API</td>
+        <td class="no">&times; Config files</td>
+        <td class="no">&times; Not applicable</td>
+        <td class="partial">~ Admin portal</td>
+      </tr>
+      <tr>
+        <td class="feat">Caller identity in audit</td>
+        <td class="us-col yes"><span class="check">&check;</span> User / team / roles</td>
+        <td class="no">&times; No identity</td>
+        <td class="partial">~ User tracking</td>
+        <td class="no">&times; Not offered</td>
+      </tr>
     </tbody>
   </table>
 
@@ -834,7 +865,8 @@ p {
         <li><span>&bull;</span> No content analysis</li>
         <li><span>&bull;</span> No cryptographic integrity</li>
         <li><span>&bull;</span> Cloud-only model support</li>
-        <li><span>&bull;</span> No policy enforcement beyond rate limits</li>
+        <li><span>&bull;</span> API key auth only, no caller identity</li>
+        <li><span>&bull;</span> External dashboards required for monitoring</li>
       </ul>
     </div>
     <div class="diff-card diff-us">
@@ -843,8 +875,9 @@ p {
         <li><span>&check;</span> Routes + governs + audits every request</li>
         <li><span>&check;</span> SHA3-512 Merkle chain &mdash; tamper-proof by design</li>
         <li><span>&check;</span> 3 content analyzers (PII, toxicity, Llama Guard)</li>
-        <li><span>&check;</span> Mathematical proof of record integrity</li>
-        <li><span>&check;</span> Cloud + local models (Ollama native support)</li>
+        <li><span>&check;</span> JWT/SSO auth with caller identity in every record</li>
+        <li><span>&check;</span> Self-service control plane + live dashboard</li>
+        <li><span>&check;</span> Cloud + local models with auto-capability discovery</li>
         <li><span>&check;</span> Pre-forward + post-forward policy enforcement</li>
       </ul>
     </div>
@@ -902,17 +935,18 @@ p {
     <div>
       <h3>Content Safety Pipeline</h3>
       <p class="small">Three independent analyzers scan every AI response in parallel:</p>
-      <p class="small"><span class="strong">PII Scanner</span> &mdash; Detects personal identifiable information (emails, phone numbers, SSNs, credit cards) using pattern matching. Catches data leakage before it reaches your application.</p>
-      <p class="small"><span class="strong">Toxicity Analyzer</span> &mdash; Scores content for harmful, offensive, or inappropriate material using keyword and pattern analysis.</p>
-      <p class="small"><span class="strong">Llama Guard 3</span> &mdash; Meta's 14-category safety classifier (S1&ndash;S14) running locally via Ollama. Covers violence, sexual content, child safety, self-harm, illegal activities, and more. Child safety violations (S4) trigger immediate blocks; other categories produce warnings.</p>
-      <p class="small muted">All three run in parallel, so latency impact is minimal. Results are stored alongside the execution record for compliance review.</p>
+      <p class="small"><span class="strong">PII Scanner</span> &mdash; Severity-tiered detection. High-risk PII (credit cards, SSNs, AWS keys, API tokens) is blocked; low-risk PII (emails, IPs, phone numbers) is warned &mdash; preventing false positives in production while catching real data leakage.</p>
+      <p class="small"><span class="strong">Toxicity Analyzer</span> &mdash; Keyword and pattern analysis for harmful, offensive, or inappropriate material.</p>
+      <p class="small"><span class="strong">Llama Guard 3</span> &mdash; Meta's 14-category safety classifier (S1&ndash;S14) running locally. Child safety violations (S4) trigger immediate blocks; other categories produce audit warnings.</p>
+      <p class="small muted">All three run in parallel. For thinking models (e.g. qwen3), analyzers automatically scan reasoning content &mdash; ensuring safety classifiers fire even when the model uses chain-of-thought.</p>
     </div>
     <div>
-      <h3>Tool-Aware Auditing</h3>
-      <p class="small">Modern AI agents don't just generate text &mdash; they call tools, search the web, and interact with external systems. The gateway audits these interactions too:</p>
-      <p class="small"><span class="strong">MCP Protocol Support</span> &mdash; Full Model Context Protocol integration. Tool calls are intercepted, executed, and recorded with input/output hash pairs (SHA3-512).</p>
-      <p class="small"><span class="strong">Built-in Web Search</span> &mdash; Native web search tool that agents can invoke. Search queries, results, and source URLs are all captured in the audit trail.</p>
-      <p class="small"><span class="strong">Content Analysis on Tool Output</span> &mdash; Tool results pass through the same PII and toxicity analyzers as model responses. A tool that returns sensitive data is flagged just like a model response would be.</p>
+      <h3>Operational Control</h3>
+      <p class="small">The gateway isn't just security infrastructure &mdash; it's a complete operational control surface:</p>
+      <p class="small"><span class="strong">Self-Service Control Plane</span> &mdash; Manage model attestations, security policies, and token budgets through a built-in dashboard UI and REST API. No config files to edit, no restarts required.</p>
+      <p class="small"><span class="strong">Live Observability Dashboard</span> &mdash; Real-time charts for throughput, token usage, and inference latency. Historical views from 1 hour to 30 days. Session explorer, chain verification, and attempt auditing &mdash; all built in, no Grafana or Datadog required.</p>
+      <p class="small"><span class="strong">Enterprise Auth (JWT/SSO)</span> &mdash; Supports HS256, RS256, and ES256 with JWKS auto-refresh. Caller identity (user, team, roles) is resolved from JWT claims and attached to every audit record.</p>
+      <p class="small"><span class="strong">Tool-Aware Auditing</span> &mdash; MCP protocol support with full I/O hashing, built-in web search, and content analysis on tool output. Models auto-discovered for tool capability &mdash; no manual configuration.</p>
     </div>
   </div>
 
@@ -944,7 +978,7 @@ p {
 
   <div class="callout">
     <div class="callout-title">Deployment Options</div>
-    <p><span class="strong">Docker / Docker Compose</span> for development and small teams. <span class="strong">Kubernetes + Helm</span> for production-grade deployments with horizontal scaling. <span class="strong">Bare metal</span> for air-gapped or on-premise environments. Redis backend available for multi-instance state sharing. The gateway runs on a single port (8000) and serves all providers from one endpoint.</p>
+    <p><span class="strong">Docker / Docker Compose</span> for development and small teams. <span class="strong">Kubernetes + Helm</span> for production with horizontal scaling. <span class="strong">Bare metal</span> for air-gapped environments. Redis for multi-instance state sharing. Ships with documented compliance mappings for <span class="strong">EU AI Act</span> (Articles 9/12/14/15/61), <span class="strong">NIST AI RMF</span>, and <span class="strong">SOC 2</span> Trust Criteria.</p>
   </div>
 
   <div style="text-align: center; margin-top: 4mm;">

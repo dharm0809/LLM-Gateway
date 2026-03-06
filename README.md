@@ -1,7 +1,5 @@
 # Walacor AI Security Gateway
 
-claude --resume 2ee8da57-29c3-4afc-afd8-b6c8f4fc2288
-
 **The governance enforcement and cryptographic audit layer for enterprise AI infrastructure.**
 
 A production-grade, drop-in ASGI proxy that integrates with any LLM provider without changing application code. The gateway enforces five security guarantees on every inference request — model attestation, full-fidelity audit recording, pre-inference policy, post-inference content analysis, and session chain integrity — while feeding a cryptographic audit trail to the Walacor control plane. Providers stay providers; the governance layer is Walacor's.
@@ -116,6 +114,13 @@ Every allowed request produces one `ExecutionRecord` written to Walacor's backen
 | `sequence_number` | Turn index within the session (G5) |
 | `previous_record_hash` | Hash of the preceding turn in the session chain (G5) |
 | `record_hash` | SHA3-512 Merkle hash of this record's canonical fields (G5) |
+| `latency_ms` | End-to-end request latency in milliseconds |
+| `prompt_tokens` | Number of prompt tokens consumed |
+| `completion_tokens` | Number of completion tokens generated |
+| `total_tokens` | Total tokens (`prompt_tokens + completion_tokens`) |
+| `thinking_content` | Model reasoning content (if thinking strip is enabled and the model produced `<think>` blocks) |
+| `response_policy_result` | Post-inference content analysis outcome: `pass`, `blocked`, `flagged`, or `skipped` |
+| `analyzer_decisions` | Array of `{analyzer_id, verdict, confidence, category, reason}` from all content analyzers |
 
 ---
 
@@ -446,6 +451,7 @@ Requires the `opentelemetry-sdk`, `opentelemetry-exporter-otlp`, and `openteleme
 | `/v1/control/budgets` | POST | Create/update budget |
 | `/v1/control/budgets/{id}` | DELETE | Remove budget |
 | `/v1/control/status` | GET | Comprehensive gateway control status |
+| `/v1/control/discover` | GET | Scan configured providers for available models |
 | `/v1/attestation-proofs` | GET | Attestation proofs (SyncClient format) |
 | `/v1/policies` | GET | Active policies (SyncClient format) |
 
@@ -539,7 +545,7 @@ Regex-based, deterministic, zero external dependencies. Detects:
 | AWS access key IDs | `AKIAIOSFODNN7EXAMPLE` |
 | API keys / tokens / secrets | `api_key: abc123...` patterns |
 
-Returns `BLOCK` with `confidence=0.99` on first match. No detected content is logged or stored.
+Uses severity tiers: high-risk PII (credit cards, SSNs, AWS access keys, API keys/tokens) returns `BLOCK` with `confidence=0.99`; low-risk PII (email addresses, phone numbers, IP addresses) returns `WARN` with `confidence=0.99`. This prevents false-positive blocks when models include example IPs or emails in educational responses. No detected content is logged or stored.
 
 ### Built-in: `walacor.toxicity.v1`
 
@@ -563,9 +569,11 @@ Model-based content safety using Meta's Llama Guard 3. Runs the response through
 | Backend | Ollama (local inference) |
 | Default model | `llama-guard3` (1B parameter variant) |
 | Timeout | 10 seconds (configurable) |
-| Verdict | `BLOCK` on `unsafe`, `PASS` on `safe` |
+| Verdict | `BLOCK` for S4 (child safety), `WARN` for all other unsafe categories (S1–S3, S5–S14), `PASS` on `safe` |
 
 Llama Guard runs concurrently with PII and toxicity analyzers — all three execute in parallel under enforced timeouts. No response content is stored by the analyzer.
+
+> **Thinking model support:** For models that use `<think>` reasoning (e.g. qwen3), the thinking strip moves all content to `thinking_content`. Content analyzers automatically fall back to analyzing `thinking_content` when `content` is empty, ensuring safety classifiers always fire regardless of thinking mode.
 
 ### Writing a custom analyzer
 
@@ -759,6 +767,7 @@ The gateway includes a built-in audit lineage dashboard served at `/lineage/`. I
 | **Execution Detail** | Full execution record including all fields, tool events with input data and sources, thinking content, and highlighted chain fields |
 | **Tool Events** | Rich tool call display: tool name, type and source badges, terminal-style input data, clickable source links, SHA3-512 hashes, content analysis verdicts on tool output, duration, and iteration count |
 | **Chain Verification** | Server-side and client-side SHA3-512 chain recomputation with per-record pass/fail status |
+| **Token Usage & Latency Charts** | Dual canvas charts on the Overview page. Token chart shows stacked area for prompt vs completion tokens over time. Latency chart shows average inference latency. Both support live mode (polling `/metrics` every 3s) and historical mode (1h, 24h, 7d, 30d ranges via `/v1/lineage/token-latency`). Shared range selector with the throughput chart. |
 | **Attempts / Completeness** | Recent attempt records with disposition statistics |
 
 ### API endpoints
@@ -772,6 +781,8 @@ All `/v1/lineage/*` endpoints return JSON. They bypass API key authentication (s
 | `GET /v1/lineage/executions/{execution_id}` | — | `{record, tool_events}` |
 | `GET /v1/lineage/attempts` | `limit`, `offset` | `{items, stats}` |
 | `GET /v1/lineage/verify/{session_id}` | — | `{valid, records, errors}` |
+| `GET /v1/lineage/metrics` | `range` (`1h`,`24h`,`7d`,`30d`) | Time-bucketed attempt metrics (throughput, allowed/blocked counts) |
+| `GET /v1/lineage/token-latency` | `range` (`1h`,`24h`,`7d`,`30d`) | Time-bucketed token usage and latency aggregation for charts |
 
 ### Chain verification
 
@@ -819,7 +830,8 @@ All `/v1/control/*` endpoints require API key authentication (sent via `X-API-Ke
 | `/v1/control/budgets` | GET | List budgets. Optional `?tenant_id=` filter. |
 | `/v1/control/budgets` | POST | Create or update budget. Body: `{tenant_id, user, period, max_tokens}` |
 | `/v1/control/budgets/{id}` | DELETE | Remove budget |
-| `/v1/control/status` | GET | Comprehensive gateway status (caches, WAL, sync mode, model capabilities) |
+| `/v1/control/status` | GET | Comprehensive gateway status (caches, WAL, sync mode, model capabilities, auth, providers, budgets) |
+| `/v1/control/discover` | GET | Scan Ollama and OpenAI for available models. Returns `{models: [{model_id, provider, source, registered}]}` |
 
 **Side effects:** Every mutation (POST/PUT/DELETE) immediately refreshes the corresponding in-memory cache. Attestation changes clear and repopulate `attestation_cache`. Policy changes call `policy_cache.set_policies()` with a new version and fresh `fetched_at`. Budget changes call `budget_tracker.configure()` for each DB budget and `budget_tracker.remove()` for deleted ones.
 
@@ -842,10 +854,10 @@ The lineage dashboard at `/lineage/` includes a **Control** tab with four sub-vi
 
 | Sub-view | Description |
 |---|---|
-| **Models** | Table of attested models with status badges, verification levels, and approve/revoke/remove actions. Shows auto-discovered models from `/health`. Inline "Add Model" form. |
+| **Models** | Table of attested models with status badges, verification levels, and approve/revoke/remove actions. "Discover Models" button scans configured providers (Ollama, OpenAI) and shows available models with one-click Register or Register All. Inline "Add Model" form. |
 | **Policies** | Table of policies with enforcement level badges, rule counts, and edit/delete actions. Policy editor with rules builder (field/operator/value rows). |
 | **Budgets** | Table of budgets with usage progress bars (green→amber→red gradient). Inline "Add Budget" form. |
-| **Status** | Read-only card grid showing gateway info, cache status, WAL status, model capabilities, and sync mode. |
+| **Status** | Read-only card grid showing gateway info, cache status, WAL status, model capabilities, sync mode, auth & security (auth mode, JWT, content analyzers), configured providers, and runtime state (active sessions, token budget, model routes). |
 
 The Control tab requires API key authentication — entering the key in the auth card stores it in `sessionStorage` for the session.
 
@@ -925,6 +937,22 @@ uvicorn gateway.main:app --port 8000
 ```
 
 Requirements: Python 3.12+, `walacor-core` package.
+
+---
+
+## Documentation
+
+| Document | Audience | Description |
+|---|---|---|
+| [How It Works](docs/HOW-IT-WORKS.md) | Engineers, technical managers | Complete walkthrough: pipeline, tool execution, MCP, content analysis, audit trail |
+| [Visual Workflow](docs/gateway-workflow.html) | Presentations, demos | Interactive HTML diagram of the full architecture and pipeline |
+| [Executive Briefing](docs/WIKI-EXECUTIVE.md) | CEO, leadership | Narrative explanation of what we built and why |
+| [Overview](OVERVIEW.md) | Quick reference | One-page summary |
+| [EU AI Act Compliance](docs/EU-AI-ACT-COMPLIANCE.md) | Compliance, legal | EU AI Act, NIST AI RMF, SOC 2 mapping |
+| [Flow & Soundness](docs/FLOW-AND-SOUNDNESS.md) | Security reviewers | Pipeline flowcharts + soundness analysis |
+| [Configuration](docs/CONFIGURATION.md) | DevOps, operators | All config variables |
+| [Adapters](docs/ADAPTERS.md) | Engineers | Provider adapter details |
+| [Quick Start](docs/QUICKSTART.md) | New users | Getting started guide |
 
 ---
 

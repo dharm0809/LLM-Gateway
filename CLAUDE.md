@@ -98,7 +98,11 @@ Walacor Gateway — ASGI audit/governance proxy for LLM providers. Source: `src/
 - `/v1/control` paths skip `completeness_middleware` and require `api_key_middleware`
 - Dashboard: "Control" tab with 4 sub-views (Models, Policies, Budgets, Status) + auth gate (sessionStorage API key)
 - `fetchControlJSON()` and `controlFetch()` helpers in app.js — adds `X-API-Key` header
-- Tests: `test_control_store.py` (20 tests), `test_control_api.py` (10 tests); total suite: 171 pass, 2 skip
+- `discovery.py`: on-demand model discovery from Ollama (`/api/tags`) and OpenAI (`/v1/models`); 5s timeout, fail-open
+- `GET /v1/control/discover`: scans providers, returns `{models: [{model_id, provider, source, registered}]}`
+- `control_status()` enriched: `auth_mode`, `jwt_configured`, `content_analyzers`, `providers`, `session_chain`, `token_budget`, `model_routes_count`, `lineage_enabled`
+- Dashboard Models tab: "Discover Models" button → discovery panel with Register/Register All; Status tab: Auth & Security, Providers, Runtime State cards
+- Tests: `test_control_store.py` (20 tests), `test_control_api.py` (10 tests), `test_discovery.py` (12 tests); total suite: 204 pass, 2 skip
 
 ## Auto-Attestation (no control plane)
 - When `control_plane_url` is empty, `_init_governance` seeds empty pass-all policies and skips SyncClient
@@ -115,3 +119,25 @@ Walacor Gateway — ASGI audit/governance proxy for LLM providers. Source: `src/
 - **OTel**: optional dep `[telemetry]` (`pip install 'walacor-gateway[telemetry]'`); `src/gateway/telemetry/otel.py`; single retroactive span per request emitted in `_build_and_write_record` after write; fail-open on `ImportError`; GenAI semantic conventions (gen_ai.system, gen_ai.request.model, gen_ai.usage.*) + walacor.* custom attributes; `ctx.tracer` in `PipelineContext`
 - **Docker demo**: `deploy/docker-compose.yml` has `ollama` + `demo-init` services under `profiles: [demo, ollama]`; `demo/quickstart.py` pulls model, sends request, prints audit info; `docker compose --profile demo up` to run
 - `.env.example` at repo root — all WALACOR_ env vars with comments, grouped by feature
+
+## Phase 21: JWT/SSO Auth, Caller Identity, Compliance Doc, Dashboard Polish
+- **JWT/SSO auth**: `src/gateway/auth/jwt_auth.py` — `validate_jwt()` supports HS256 (secret) and RS256/ES256 (JWKS); lazy `PyJWKClient` with 1h TTL cache; optional dep `[auth]` (`pip install 'walacor-gateway[auth]'`)
+- **CallerIdentity**: `src/gateway/auth/identity.py` — frozen dataclass (`user_id`, `email`, `roles`, `team`, `source`); `resolve_identity_from_headers()` reads `X-User-Id`, `X-Team-Id`, `X-User-Roles`
+- **Auth modes**: `WALACOR_AUTH_MODE=api_key` (default, unchanged) | `jwt` (JWT-only) | `both` (JWT first, API key fallback); configured in `main.py:api_key_middleware`
+- **Caller identity in audit trail**: orchestrator merges `request.state.caller_identity` into `call.metadata` (`user`, `team`, `caller_roles`, `caller_email`, `identity_source`); `walacor_user_id` exposed for completeness middleware
+- **WAL schema migration**: `writer.py:_ensure_conn()` adds `user TEXT` column to `gateway_attempts` (ALTER TABLE ADD COLUMN, try/except for existing)
+- **Completeness middleware**: passes `user=user_id` to both `walacor_client.write_attempt()` and `wal_writer.write_attempt()`
+- **Lineage reader**: `list_sessions()` extracts `$.user` from record JSON; `get_attempts()` includes `user` column
+- **Dashboard polish**: identity badges (`.badge-identity`), governance status card (`.compliance-card`), chain verification glow animations (`.chain-verified-pass`/`.chain-verified-fail`)
+- **Compliance doc**: `docs/EU-AI-ACT-COMPLIANCE.md` — EU AI Act (Articles 9/12/14/15/61), NIST AI RMF, SOC 2 Trust Criteria, config appendix
+- Config: 10 new fields (`auth_mode`, `jwt_secret`, `jwt_jwks_url`, `jwt_issuer`, `jwt_audience`, `jwt_algorithms`, `jwt_user_claim`, `jwt_email_claim`, `jwt_roles_claim`, `jwt_team_claim`)
+- Tests: `test_jwt_auth.py` (11 tests), `test_identity.py` (7 tests); total suite: 189 pass, 2 skip
+
+## Phase 22: Token/Latency Charts + Governance Hardening (Stress Test Fixes)
+- **Token Usage & Latency Charts**: `TokenLatencyChart` class in `app.js` — dual canvas (stacked area for tokens, line+area for latency); live mode polls `/metrics`, historical mode fetches `/v1/lineage/token-latency`; shared range bar (Current | 1h | 24h | 7d | 30d)
+- **New fields in execution records**: `latency_ms`, `prompt_tokens`, `completion_tokens`, `total_tokens` added to `build_execution_record()` in `hasher.py`; threaded through all write paths in `orchestrator.py`
+- **New API endpoint**: `GET /v1/lineage/token-latency?range=1h|24h|7d|30d` — time-bucketed aggregation via `json_extract()` in `reader.py`
+- **CRITICAL FIX: Content analysis for thinking models**: `evaluate_post_inference()` now uses `model_response.content or model_response.thinking_content` — previously, when thinking strip moved ALL content to `thinking_content` (e.g. qwen3:4b), `content` was empty and content analysis was **always skipped**, meaning Llama Guard/PII/toxicity NEVER analyzed thinking model responses
+- **PII detector severity tiers**: `_BLOCK_PII_TYPES = {"credit_card", "ssn", "aws_access_key", "api_key"}` — high-risk PII blocks, low-risk PII (ip_address, email_address, phone_number) issues WARN. Prevents false positive blocks when models include example IPs in educational responses
+- **Governance stress test**: `tests/governance_stress.py` — 88 parallel requests across 48 questions, both qwen3:4b and gemma3:1b, tests all categories (general, reasoning, web search, creative, code, Llama Guard S1/S4/S9/S11)
+- Tests: `test_lineage_reader.py` (17 tests); total suite: 207 pass, 2 skip

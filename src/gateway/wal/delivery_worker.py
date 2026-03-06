@@ -116,8 +116,11 @@ class DeliveryWorker:
                     self._wal.mark_delivered(execution_id)
                 else:
                     delivery_total.labels(result="error").inc()
-                    raise RuntimeError(f"HTTP {r.status_code}")
+                    logger.warning("Delivery server error for %s: HTTP %s — will retry next cycle", execution_id, r.status_code)
+                    break  # retry entire batch next cycle, don't block remaining records
+            except asyncio.CancelledError:
+                raise  # let cancellation propagate
             except Exception as e:
                 delivery_total.labels(result="error").inc()
-                logger.warning("Delivery failed for %s: %s", execution_id, e)
-                raise
+                logger.warning("Delivery failed for %s: %s — will retry next cycle", execution_id, e)
+                break  # retry next cycle instead of aborting the loop

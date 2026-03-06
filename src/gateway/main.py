@@ -11,7 +11,7 @@ import httpx
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
@@ -27,6 +27,8 @@ from gateway.lineage.api import (
     lineage_session_timeline,
     lineage_execution,
     lineage_attempts,
+    lineage_metrics_history,
+    lineage_token_latency_history,
     lineage_verify,
 )
 from gateway.control.api import (
@@ -41,6 +43,7 @@ from gateway.control.api import (
     control_upsert_budget,
     control_delete_budget,
     control_status,
+    control_discover_models,
 )
 from gateway.control.sync_api import (
     sync_attestation_proofs,
@@ -52,15 +55,89 @@ configure_json_logging(os.environ.get("WALACOR_LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 
+def _resolve_header_identity_fallback(request: Request) -> None:
+    """Set caller_identity from headers if not already set by JWT."""
+    if hasattr(request.state, "caller_identity"):
+        return
+    try:
+        from gateway.auth.identity import resolve_identity_from_headers
+        identity = resolve_identity_from_headers(request)
+        if identity is not None:
+            request.state.caller_identity = identity
+    except Exception:
+        logger.debug("resolve_identity_from_headers failed", exc_info=True)
+
+
+def _try_jwt_auth(request: Request, settings) -> bool:
+    """Attempt JWT authentication. Returns True if valid JWT was found and identity set."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return False
+    token = auth_header[7:].strip()
+    if not token:
+        return False
+    # Check if this looks like a JWT (has dots) vs a plain API key
+    if token.count(".") < 2:
+        return False
+    try:
+        from gateway.auth.jwt_auth import validate_jwt
+        identity = validate_jwt(
+            token,
+            secret=settings.jwt_secret,
+            jwks_url=settings.jwt_jwks_url,
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+            algorithms=settings.jwt_algorithms_list,
+            user_claim=settings.jwt_user_claim,
+            email_claim=settings.jwt_email_claim,
+            roles_claim=settings.jwt_roles_claim,
+            team_claim=settings.jwt_team_claim,
+        )
+        if identity is not None:
+            request.state.caller_identity = identity
+            return True
+    except Exception as e:
+        logger.debug("JWT auth attempt failed: %s", e)
+    return False
+
+
 async def api_key_middleware(request: Request, call_next):
-    """When WALACOR_GATEWAY_API_KEYS is set, require valid API key on proxy routes."""
-    if request.url.path in ("/health", "/metrics") or request.url.path.startswith(("/lineage", "/v1/lineage")):
+    """When WALACOR_GATEWAY_API_KEYS is set, require valid API key on proxy routes.
+
+    Supports auth_mode: 'api_key' (default), 'jwt', or 'both'.
+    """
+    if request.url.path in ("/", "/health", "/metrics") or request.url.path.startswith(("/lineage", "/v1/lineage")):
         return await call_next(request)
     settings = get_settings()
+    mode = settings.auth_mode
+
+    if mode == "jwt":
+        # JWT-only: require valid JWT
+        if _try_jwt_auth(request, settings):
+            _resolve_header_identity_fallback(request)
+            return await call_next(request)
+        request.state.walacor_disposition = "denied_auth"
+        return JSONResponse({"error": "Missing or invalid JWT"}, status_code=401)
+
+    if mode == "both":
+        # Try JWT first, fall back to API key
+        if _try_jwt_auth(request, settings):
+            _resolve_header_identity_fallback(request)
+            return await call_next(request)
+        # Fall through to API key check
+        err = require_api_key_if_configured(request, settings.api_keys_list)
+        if err is not None:
+            request.state.walacor_disposition = "denied_auth"
+            return err
+        _resolve_header_identity_fallback(request)
+        return await call_next(request)
+
+    # Default: api_key mode (unchanged behavior)
     err = require_api_key_if_configured(request, settings.api_keys_list)
     if err is not None:
         request.state.walacor_disposition = "denied_auth"
         return err
+    _resolve_header_identity_fallback(request)
     return await call_next(request)
 
 
@@ -81,6 +158,10 @@ async def cors_middleware(request: Request, call_next):
     for key, value in _CORS_HEADERS.items():
         response.headers[key] = value
     return response
+
+
+async def _root_redirect(request: Request):
+    return RedirectResponse(url="/lineage/", status_code=302)
 
 
 async def catch_all_post(request: Request):
@@ -169,8 +250,11 @@ def _init_wal(settings, ctx) -> None:
     wal_dir = Path(settings.wal_path)
     wal_dir.mkdir(parents=True, exist_ok=True)
     ctx.wal_writer = WALWriter(str(wal_dir / "wal.db"))
-    ctx.delivery_worker = DeliveryWorker(ctx.wal_writer)
-    ctx.delivery_worker.start()
+    if settings.control_plane_url:
+        ctx.delivery_worker = DeliveryWorker(ctx.wal_writer)
+        ctx.delivery_worker.start()
+    else:
+        logger.info("Delivery worker skipped: WALACOR_CONTROL_PLANE_URL not configured")
 
 
 async def _init_walacor(settings, ctx) -> None:
@@ -397,55 +481,66 @@ async def on_startup() -> None:
     settings = get_settings()
     ctx = get_pipeline_context()
 
-    # Walacor storage is mode-independent: init before the skip_governance shortcut
-    # so completeness attempts are always written when credentials are configured.
-    if settings.walacor_storage_enabled:
-        await _init_walacor(settings, ctx)
+    try:
+        # Walacor storage is mode-independent: init before the skip_governance shortcut
+        # so completeness attempts are always written when credentials are configured.
+        if settings.walacor_storage_enabled:
+            await _init_walacor(settings, ctx)
 
-    # Shared HTTP client for all modes. Without this, skip_governance would create
-    # a new one-off httpx.AsyncClient per request (Finding 7).
-    ctx.http_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0, connect=10.0),
-        limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
-        http2=True,
-    )
+        # Shared HTTP client for all modes. Without this, skip_governance would create
+        # a new one-off httpx.AsyncClient per request (Finding 7).
+        ctx.http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
+            http2=True,
+        )
 
-    # Always init WAL when lineage is enabled (lineage reads from local WAL).
-    if settings.lineage_enabled and not ctx.wal_writer:
-        _init_wal(settings, ctx)
+        # Always init WAL when lineage is enabled (lineage reads from local WAL).
+        if settings.lineage_enabled and not ctx.wal_writer:
+            _init_wal(settings, ctx)
 
-    if settings.skip_governance:
-        ctx.skip_governance = True
+        if settings.skip_governance:
+            ctx.skip_governance = True
+            _init_lineage(settings, ctx)
+            logger.info("Gateway running in skip_governance (transparent proxy) mode")
+            return
+
+        await _init_governance(settings, ctx)
+        if not settings.walacor_storage_enabled and not ctx.wal_writer:
+            _init_wal(settings, ctx)
         _init_lineage(settings, ctx)
-        logger.info("Gateway running in skip_governance (transparent proxy) mode")
-        return
-
-    await _init_governance(settings, ctx)
-    if not settings.walacor_storage_enabled and not ctx.wal_writer:
-        _init_wal(settings, ctx)
-    _init_lineage(settings, ctx)
-    ctx.redis_client = await _init_redis(settings)
-    _init_content_analyzers(settings, ctx)
-    if settings.llama_guard_enabled:
-        _init_llama_guard(settings, ctx)
-    _init_budget_tracker(settings, ctx)
-    _init_session_chain(settings, ctx)
-    if settings.tool_aware_enabled and settings.mcp_servers_json:
-        await _init_tool_registry(settings, ctx)
-    if settings.tool_aware_enabled and settings.web_search_enabled:
-        await _init_web_search_tool(settings, ctx)
-    if settings.otel_enabled:
-        _init_otel(settings, ctx)
-    if settings.control_plane_enabled:
-        _init_control_plane(settings, ctx)
-    await _self_test()
-    if ctx.sync_client:
-        ctx.sync_loop_task = asyncio.create_task(_run_sync_loop(settings, ctx))
-    elif settings.control_plane_enabled:
-        # Local sync loop keeps policy_cache.fetched_at fresh (fixes fail_closed)
-        from gateway.control.loader import _run_local_sync_loop
-        ctx.local_sync_task = asyncio.create_task(_run_local_sync_loop(settings, ctx))
-    logger.info("Gateway startup complete: governance pipeline ready, WAL and delivery worker started")
+        ctx.redis_client = await _init_redis(settings)
+        _init_content_analyzers(settings, ctx)
+        if settings.llama_guard_enabled:
+            _init_llama_guard(settings, ctx)
+        _init_budget_tracker(settings, ctx)
+        _init_session_chain(settings, ctx)
+        if settings.tool_aware_enabled and settings.mcp_servers_json:
+            await _init_tool_registry(settings, ctx)
+        if settings.tool_aware_enabled and settings.web_search_enabled:
+            await _init_web_search_tool(settings, ctx)
+        if settings.otel_enabled:
+            _init_otel(settings, ctx)
+        if settings.control_plane_enabled:
+            _init_control_plane(settings, ctx)
+        # Warn if control plane is active but no API keys are configured
+        if settings.control_plane_enabled and not settings.api_keys_list:
+            logger.warning(
+                "SECURITY: Control plane is enabled but WALACOR_GATEWAY_API_KEYS is empty — "
+                "control plane mutations (attestations, policies, budgets) are accessible without authentication"
+            )
+        await _self_test()
+        if ctx.sync_client:
+            ctx.sync_loop_task = asyncio.create_task(_run_sync_loop(settings, ctx))
+        elif settings.control_plane_enabled:
+            # Local sync loop keeps policy_cache.fetched_at fresh (fixes fail_closed)
+            from gateway.control.loader import _run_local_sync_loop
+            ctx.local_sync_task = asyncio.create_task(_run_local_sync_loop(settings, ctx))
+        logger.info("Gateway startup complete: governance pipeline ready, WAL and delivery worker started")
+    except Exception:
+        logger.critical("Gateway startup FAILED — cleaning up partially initialized resources", exc_info=True)
+        await on_shutdown()
+        raise
 
 
 async def on_shutdown() -> None:
@@ -544,6 +639,7 @@ async def on_shutdown() -> None:
 def create_app() -> Starlette:
     _static_dir = Path(__file__).parent / "lineage" / "static"
     routes: list = [
+        Route("/", _root_redirect, methods=["GET"]),
         Route("/health", health_response, methods=["GET"]),
         Route("/metrics", metrics_response, methods=["GET"]),
         # Lineage API
@@ -551,6 +647,8 @@ def create_app() -> Starlette:
         Route("/v1/lineage/sessions/{session_id:path}", lineage_session_timeline, methods=["GET"]),
         Route("/v1/lineage/executions/{execution_id:path}", lineage_execution, methods=["GET"]),
         Route("/v1/lineage/attempts", lineage_attempts, methods=["GET"]),
+        Route("/v1/lineage/metrics", lineage_metrics_history, methods=["GET"]),
+        Route("/v1/lineage/token-latency", lineage_token_latency_history, methods=["GET"]),
         Route("/v1/lineage/verify/{session_id:path}", lineage_verify, methods=["GET"]),
         # Control plane CRUD
         Route("/v1/control/attestations", control_list_attestations, methods=["GET"]),
@@ -564,6 +662,7 @@ def create_app() -> Starlette:
         Route("/v1/control/budgets", control_upsert_budget, methods=["POST"]),
         Route("/v1/control/budgets/{id:path}", control_delete_budget, methods=["DELETE"]),
         Route("/v1/control/status", control_status, methods=["GET"]),
+        Route("/v1/control/discover", control_discover_models, methods=["GET"]),
         # Sync-contract endpoints (for fleet sync)
         Route("/v1/attestation-proofs", sync_attestation_proofs, methods=["GET"]),
         Route("/v1/policies", sync_policies, methods=["GET"]),

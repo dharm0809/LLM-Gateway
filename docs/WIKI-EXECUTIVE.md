@@ -152,13 +152,17 @@ Three are built in:
 
 | Analyzer | Approach | What it catches |
 |----------|----------|----------------|
-| `walacor.pii.v1` | Regex, deterministic | Credit cards (Luhn-validated), SSNs, emails, phone numbers, IPs, AWS keys, API tokens |
+| `walacor.pii.v1` | Regex, deterministic, severity-tiered | High-risk (credit cards, SSNs, AWS keys, API tokens) → **blocks**; low-risk (emails, phone numbers, IPs) → **warns** |
 | `walacor.toxicity.v1` | Keyword deny-list | Self-harm indicators, violence instructions, child safety violations, custom terms |
-| `walacor.llama_guard.v3` | Model-based (Meta Llama Guard 3) | Violence, sexual content, criminal planning, and other unsafe categories defined by Meta's safety taxonomy |
+| `walacor.llama_guard.v3` | Model-based (Meta Llama Guard 3) | Child safety violations → **blocks**; violence, sexual content, criminal planning, and other unsafe categories → **warns** (logged for audit, not blocked) |
 
 The third analyzer — Llama Guard — is a significant step beyond rule-based detection. It uses a purpose-built safety model (Meta's Llama Guard 3, running locally via Ollama) to evaluate response content against a broad taxonomy of unsafe categories. Unlike regex or keyword matching, it understands context and intent. It runs concurrently with the other two analyzers under the same enforced timeout, and like them, stores no content — only a verdict.
 
 All three analyzers run in parallel. No analyzed content is logged or stored by any analyzer — analysis happens in memory and the result is a verdict only. Verdicts are `PASS`, `WARN` (forwarded and flagged in the audit record), or `BLOCK` (403 returned to caller).
+
+The PII detector uses severity tiers because low-risk PII appears routinely in legitimate AI responses — a model explaining DNS will naturally mention an IP address, and a model explaining email protocols will mention an example address. Blocking these would create false positives. High-risk PII (financial data, identity documents, credentials) is always blocked.
+
+For models that use internal reasoning (e.g. qwen3's `<think>` blocks), the gateway ensures content analysis runs on the reasoning content when the visible response is empty. Without this, a thinking model that places its entire answer inside reasoning tokens would bypass all safety classifiers.
 
 Custom analyzers can be added by implementing a single interface without touching the pipeline. This is intentional: we expect content analysis requirements to evolve, and we built for extensibility.
 
@@ -381,11 +385,12 @@ The Kubernetes egress policy limits outbound connections to the control plane an
 | Endpoint | Returns |
 |----------|---------|
 | `GET /health` | Enforcement mode, storage backend, cache staleness, WAL depth, token budget snapshot, active sessions, model capabilities |
+| `GET /v1/control/status` | All of `/health` plus auth mode, JWT configuration, content analyzers, configured providers, model routing, session chain state, and lineage status |
 | `GET /metrics` | Prometheus: request counters by outcome, attempt counters by disposition, token usage, WAL depth, disk usage, cache age, session count, tool call counts |
 
 Health states: `healthy` → `degraded` → `fail_closed`. The transition from `healthy` to `degraded` is a warning signal, not a failure — ops teams have time to act. `fail_closed` means requests are being rejected and immediate intervention is required.
 
-The lineage dashboard's Overview page consumes the `/metrics` endpoint directly to render a live throughput graph — operators can see request rates, allowed vs blocked traffic, and token consumption in real time without configuring external monitoring.
+The lineage dashboard's Overview page consumes the `/metrics` endpoint directly to render live charts — throughput (requests/second), token usage (prompt and completion tokens), and inference latency. Operators can see request rates, allowed vs blocked traffic, token consumption trends, and latency patterns in real time without configuring external monitoring. Historical views (1 hour to 30 days) are served from the WAL database.
 
 ---
 
@@ -403,6 +408,7 @@ We built a dashboard directly into the gateway at `/lineage/`. It gives anyone �
 | **Session Timeline** | The ordered sequence of executions within a conversation — model used, policy outcome, chain hashes, and visual links between records |
 | **Execution Detail** | The full audit record for any single request — prompt, response, provider ID, model hash, policy version, tool calls with input data and sources, content analysis on tool output, and reasoning content |
 | **Chain Verification** | One-click verification that recomputes every hash in the chain and confirms linkage is intact — runs both on the server and independently in the browser |
+| **Token Usage & Latency** | Dual charts showing token consumption (prompt vs completion, stacked area) and inference latency over time. Supports live mode (real-time polling) and historical ranges (1 hour to 30 days). Helps identify cost trends and performance degradation. |
 | **Attempts** | Every request that entered the gateway with its disposition — allowed, denied, errored — for completeness auditing |
 
 ### Why it matters
@@ -444,6 +450,8 @@ The gateway now embeds its own control plane. Model attestations, policies, and 
 - **The staleness problem is solved.** A background sync loop refreshes the policy cache from the local database every 60 seconds. The policy cache never goes stale, so the gateway never enters `fail_closed` due to cache age.
 
 - **The dashboard includes a Control tab.** The lineage dashboard at `/lineage/` now has a fourth tab: Control. It provides a visual interface for managing models (approve, revoke, remove), policies (create, edit, delete, rules builder), budgets (set limits, track usage), and a status overview. The Control tab requires an API key for authentication — the same key used for the gateway API.
+
+- **Model discovery eliminates the catch-22.** The embedded control plane blocks requests to unregistered models — but adding models used to be manual. The Models tab now includes a "Discover Models" button that scans all configured providers (Ollama, OpenAI) for their available model catalogs. The results appear in a table with one-click "Register" buttons, or a "Register All" to approve everything at once. This means an operator can see every model available in their infrastructure and approve them in seconds, without typing model names or knowing them in advance.
 
 - **Fleet support without a coordinator.** For multi-gateway deployments, one gateway is designated the "primary." Other gateways point their `WALACOR_CONTROL_PLANE_URL` to the primary. The existing sync mechanism pulls attestations and policies from the primary every 60 seconds. Changes made on the primary propagate to the fleet automatically. No additional infrastructure is required — the primary serves the sync contract through its existing API endpoints.
 

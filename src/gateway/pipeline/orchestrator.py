@@ -201,6 +201,7 @@ class _AuditParams:
     rp_result: str
     rp_decisions: list
     provider: str = ""
+    latency_ms: float | None = None
 
 
 @dataclasses.dataclass
@@ -252,6 +253,7 @@ def _strip_tools_from_call(call: ModelCall) -> ModelCall:
         new_body = json.dumps(body).encode("utf-8")
         return dataclasses.replace(call, raw_body=new_body)
     except Exception:
+        logger.warning("_strip_tools_from_call: failed to strip tools from model=%s — sending original body", call.model_id, exc_info=True)
         return call
 
 
@@ -304,9 +306,9 @@ def _serialize_tool_interaction(t: ToolInteraction, source: str) -> dict[str, An
     from walacor_core import compute_sha3_512_string
     d: dict[str, Any] = {"tool_id": t.tool_id, "tool_type": t.tool_type, "tool_name": t.tool_name, "source": source}
     if t.input_data is not None:
-        d["input_hash"] = compute_sha3_512_string(json.dumps(t.input_data, default=str))
+        d["input_hash"] = compute_sha3_512_string(json.dumps(t.input_data, default=str, sort_keys=True))
     if t.output_data is not None:
-        d["output_hash"] = compute_sha3_512_string(json.dumps(t.output_data, default=str))
+        d["output_hash"] = compute_sha3_512_string(json.dumps(t.output_data, default=str, sort_keys=True))
     if t.sources:
         d["sources"] = t.sources
     if t.metadata:
@@ -358,9 +360,9 @@ def _build_tool_event_record(
     }
     if t.input_data is not None:
         record["input_data"] = t.input_data
-        record["input_hash"] = compute_sha3_512_string(json.dumps(t.input_data, default=str))
+        record["input_hash"] = compute_sha3_512_string(json.dumps(t.input_data, default=str, sort_keys=True))
     if t.output_data is not None:
-        record["output_hash"] = compute_sha3_512_string(json.dumps(t.output_data, default=str))
+        record["output_hash"] = compute_sha3_512_string(json.dumps(t.output_data, default=str, sort_keys=True))
     if t.sources:
         record["sources"] = t.sources
     if t.metadata:
@@ -398,9 +400,15 @@ async def _write_tool_events(
                 record["content_analysis"] = analysis
         # Dual-write: Walacor backend AND local WAL (so lineage dashboard always has data)
         if ctx.walacor_client:
-            await ctx.walacor_client.write_tool_event(record)
+            try:
+                await ctx.walacor_client.write_tool_event(record)
+            except Exception as exc:
+                logger.error("Walacor write_tool_event FAILED: event_id=%s error=%s", record.get("event_id"), exc)
         if ctx.wal_writer:
-            ctx.wal_writer.write_tool_event(record)
+            try:
+                ctx.wal_writer.write_tool_event(record)
+            except Exception as exc:
+                logger.error("WAL write_tool_event FAILED: event_id=%s error=%s", record.get("event_id"), exc)
 
 
 def _emit_tool_metrics(interactions: list[ToolInteraction], provider: str, source: str) -> None:
@@ -568,8 +576,11 @@ async def _store_execution(record, request: Request, ctx) -> None:
         except Exception as exc:
             logger.error("Walacor write_execution FAILED — audit record may be lost: execution_id=%s error=%s", eid, exc)
     if ctx.wal_writer:
-        ctx.wal_writer.write_and_fsync(record)
-        written = True
+        try:
+            ctx.wal_writer.write_and_fsync(record)
+            written = True
+        except Exception as exc:
+            logger.error("WAL write_and_fsync FAILED: execution_id=%s error=%s", eid, exc)
     if written:
         execution_id_var.set(eid)
         request.state.walacor_execution_id = eid
@@ -602,6 +613,7 @@ async def _after_stream_record(
     policy_result: str,
     audit_metadata: dict,
     budget_estimated: int = 0,
+    pipeline_start: float | None = None,
 ) -> None:
     """Background task: after stream ends, evaluate response, build chain, write record (no hashing — Walcor hashes).
 
@@ -649,15 +661,26 @@ async def _after_stream_record(
                 "enforcement_mode": settings.enforcement_mode,
             },
             model_id=call.model_id, provider=adapter.get_provider_name(),
+            latency_ms=round((time.perf_counter() - pipeline_start) * 1000, 1) if pipeline_start else None,
         )
         _exec_id = record.get("execution_id", "unknown")
 
         record_hash_val = await _apply_session_chain(record, session_id, ctx, settings)
+        written = False
         if ctx.walacor_client:
-            await ctx.walacor_client.write_execution(record)
-        elif ctx.wal_writer:
-            ctx.wal_writer.write_and_fsync(record)
-        execution_id_var.set(record["execution_id"])
+            try:
+                await ctx.walacor_client.write_execution(record)
+                written = True
+            except Exception as exc:
+                logger.error("Walacor write_execution FAILED (stream): execution_id=%s error=%s", _exec_id, exc)
+        if ctx.wal_writer:
+            try:
+                ctx.wal_writer.write_and_fsync(record)
+                written = True
+            except Exception as exc:
+                logger.error("WAL write_and_fsync FAILED (stream): execution_id=%s error=%s", _exec_id, exc)
+        if written:
+            execution_id_var.set(record["execution_id"])
         await _write_tool_events(model_response.tool_interactions or [], record["execution_id"], call, "passive", ctx, settings)
         if session_id and ctx.session_chain and record_hash_val is not None:
             await ctx.session_chain.update(session_id, record["sequence_number"], record_hash_val)
@@ -673,6 +696,7 @@ async def _skip_governance_after_stream(
     buffer: list[bytes],
     call: ModelCall,
     adapter: ProviderAdapter,
+    pipeline_start: float | None = None,
 ) -> None:
     """In skip_governance mode: build execution record from stream buffer and write to Walacor/WAL."""
     ctx = get_pipeline_context()
@@ -692,6 +716,7 @@ async def _skip_governance_after_stream(
             user=call.metadata.get("user"), session_id=call.metadata.get("session_id"),
             metadata={"enforcement_mode": "skip_governance"},
             model_id=call.model_id, provider=adapter.get_provider_name(),
+            latency_ms=round((time.perf_counter() - pipeline_start) * 1000, 1) if pipeline_start else None,
         )
         if ctx.walacor_client:
             await ctx.walacor_client.write_execution(record)
@@ -804,10 +829,15 @@ async def _budget_check(
             settings.gateway_tenant_id, call.metadata.get("user"), estimated
         )
     except Exception:
-        logger.error(
-            "Budget check_and_reserve failed: tenant_id=%s estimated=%d — failing open",
+        logger.warning(
+            "Budget check_and_reserve failed: tenant_id=%s estimated=%d — FAILING OPEN (request allowed without budget check)",
             settings.gateway_tenant_id, estimated, exc_info=True,
         )
+        try:
+            from gateway.metrics.prometheus import budget_failopen_total
+            budget_failopen_total.inc()
+        except Exception:
+            pass
         return None, 0, whb, reason, None  # fail-open: allow request
     budget_rem: int | None = remaining if remaining >= 0 else None
     if not allowed:
@@ -908,6 +938,7 @@ async def _handle_skip_governance_non_streaming(
             user=call.metadata.get("user"), session_id=call.metadata.get("session_id"),
             metadata={"enforcement_mode": "skip_governance"},
             model_id=call.model_id, provider=adapter.get_provider_name(),
+            latency_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
         try:
             if ctx.walacor_client:
@@ -931,7 +962,7 @@ async def _handle_skip_governance(
     _set_disposition(request, "allowed")
     if call.is_streaming:
         buf: list[bytes] = []
-        task = BackgroundTask(_skip_governance_after_stream, buf, call, adapter)
+        task = BackgroundTask(_skip_governance_after_stream, buf, call, adapter, t0)
         resp, _ = await stream_with_tee(adapter, call, request, buffer=buf, background_task=task)
         pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
         _inc_request(provider, model, "allowed")
@@ -1050,6 +1081,7 @@ async def _build_and_write_record(
             "enforcement_mode": settings.enforcement_mode,
         },
         model_id=call.model_id, provider=params.provider,
+        latency_ms=params.latency_ms,
     )
     record_hash_val = await _apply_session_chain(record, session_id, ctx, settings)
     await _store_execution(record, request, ctx)
@@ -1132,6 +1164,21 @@ async def handle_request(request: Request) -> Response:
     extra: dict[str, Any] = {"prompt_id": prompt_id}
     if client_context:
         extra["client_context"] = client_context
+    # Merge caller identity from middleware (JWT or header-based)
+    caller_identity = getattr(request.state, "caller_identity", None)
+    if caller_identity is not None:
+        if not extra.get("user"):
+            extra["user"] = caller_identity.user_id
+        if caller_identity.email:
+            extra["caller_email"] = caller_identity.email
+        if caller_identity.roles:
+            extra["caller_roles"] = caller_identity.roles
+        if caller_identity.team:
+            extra["team"] = caller_identity.team
+        extra["identity_source"] = caller_identity.source
+        # Expose user_id for completeness middleware
+        request.state.walacor_user_id = caller_identity.user_id
+
     call = dataclasses.replace(call, metadata={**call.metadata, **extra})
 
     ctx = get_pipeline_context()
@@ -1186,7 +1233,7 @@ async def handle_request(request: Request) -> Response:
         task = BackgroundTask(
             _after_stream_record, buf, call, adapter,
             pre.att_id, pre.pv, pre.pr, pre.audit_metadata,
-            pre.budget_estimated,
+            pre.budget_estimated, t0,
         )
         resp, _ = await stream_with_tee(adapter, call, request, buffer=buf, background_task=task)
         pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
@@ -1225,6 +1272,7 @@ async def handle_request(request: Request) -> Response:
             budget_remaining=pre.budget_remaining, audit_metadata=pre.audit_metadata,
             tool_interactions=[], tool_strategy=pre.tool_strategy, tool_iterations=0,
             rp_version=0, rp_result="skipped", rp_decisions=[], provider=provider,
+            latency_ms=round((time.perf_counter() - t0) * 1000, 1),
         ), ctx, settings)
         pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
         return http_response
@@ -1247,6 +1295,7 @@ async def handle_request(request: Request) -> Response:
             tool_interactions=tool_result.interactions, tool_strategy=pre.tool_strategy,
             tool_iterations=tool_result.iterations,
             rp_version=0, rp_result="skipped", rp_decisions=[], provider=provider,
+            latency_ms=round((time.perf_counter() - t0) * 1000, 1),
         ), ctx, settings)
         pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
         return tool_result.error
@@ -1273,6 +1322,7 @@ async def handle_request(request: Request) -> Response:
             tool_interactions=tool_result.interactions, tool_strategy=pre.tool_strategy,
             tool_iterations=tool_result.iterations,
             rp_version=rp_version, rp_result=rp_result, rp_decisions=rp_decisions, provider=provider,
+            latency_ms=round((time.perf_counter() - t0) * 1000, 1),
         ), ctx, settings)
         return resp_err
 
@@ -1290,6 +1340,7 @@ async def handle_request(request: Request) -> Response:
         tool_interactions=tool_result.interactions, tool_strategy=pre.tool_strategy,
         tool_iterations=tool_result.iterations,
         rp_version=rp_version, rp_result=rp_result, rp_decisions=rp_decisions, provider=provider,
+        latency_ms=round((time.perf_counter() - t0) * 1000, 1),
     )
     await _build_and_write_record(request, call, model_response, audit_params, ctx, settings)
 

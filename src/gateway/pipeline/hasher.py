@@ -25,8 +25,10 @@ def build_execution_record(
     metadata: dict | None = None,
     model_id: str | None = None,
     provider: str | None = None,
+    latency_ms: float | None = None,
 ) -> dict:
     """Build execution record as dict (no prompt_hash/response_hash — backend hashes from content)."""
+    usage = model_response.usage or {}
     return {
         "execution_id": str(uuid.uuid4()),
         "model_attestation_id": attestation_id,
@@ -45,4 +47,8 @@ def build_execution_record(
         "provider_request_id": model_response.provider_request_id,
         "model_hash": model_response.model_hash,
         "thinking_content": model_response.thinking_content or None,
+        "latency_ms": latency_ms,
+        "prompt_tokens": usage.get("prompt_tokens") or 0,
+        "completion_tokens": usage.get("completion_tokens") or 0,
+        "total_tokens": usage.get("total_tokens") or 0,
     }

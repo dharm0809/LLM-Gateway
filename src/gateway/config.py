@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -28,6 +29,18 @@ class Settings(BaseSettings):
     # Auth
     gateway_api_keys: str = Field(default="", description="Comma-separated API keys for caller auth")
     control_plane_api_key: str = Field(default="", description="API key for gateway→control plane (X-API-Key or Bearer); required when control plane has WALACOR_API_KEYS")
+
+    # Phase 21: JWT/SSO authentication
+    auth_mode: str = Field(default="api_key", description="Auth mode: 'api_key' (default), 'jwt', or 'both'")
+    jwt_secret: str = Field(default="", description="Shared secret for HS256 JWT validation")
+    jwt_jwks_url: str = Field(default="", description="JWKS endpoint for RS256/ES256 (OIDC providers)")
+    jwt_issuer: str = Field(default="", description="Expected JWT issuer (iss claim)")
+    jwt_audience: str = Field(default="", description="Expected JWT audience (aud claim)")
+    jwt_algorithms: str = Field(default="RS256", description="Comma-separated JWT algorithms (RS256,ES256,HS256)")
+    jwt_user_claim: str = Field(default="sub", description="JWT claim for user ID")
+    jwt_email_claim: str = Field(default="email", description="JWT claim for email")
+    jwt_roles_claim: str = Field(default="roles", description="JWT claim for roles")
+    jwt_team_claim: str = Field(default="", description="JWT claim for team (empty = disabled)")
 
     # Optional identity
     gateway_id: str = Field(default_factory=lambda: f"gw-{uuid.uuid4().hex[:12]}", description="Unique gateway instance ID")
@@ -272,6 +285,10 @@ class Settings(BaseSettings):
     def api_keys_list(self) -> list[str]:
         return [k.strip() for k in self.gateway_api_keys.split(",") if k.strip()]
 
+    @property
+    def jwt_algorithms_list(self) -> list[str]:
+        return [a.strip() for a in self.jwt_algorithms.split(",") if a.strip()]
+
     @model_validator(mode="after")
     def _parse_and_cache_model_routes(self) -> "Settings":
         """Parse model_routing_json once at construction and cache in _parsed_model_routes (Finding 5)."""
@@ -289,6 +306,10 @@ class Settings(BaseSettings):
             data = json.loads(raw)
             self._parsed_model_routes = data if isinstance(data, list) else [data]
         except Exception:
+            logging.getLogger(__name__).error(
+                "WALACOR_MODEL_ROUTING_JSON parse failed — model routing disabled. Fix the JSON or remove the env var.",
+                exc_info=True,
+            )
             self._parsed_model_routes = []
         return self
 

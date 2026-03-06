@@ -7,8 +7,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/lineage/style.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha3/0.9.3/sha3.min.js"></script>
+    <link rel="stylesheet" href="/lineage/style.css?v=2">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha3/0.9.3/sha3.min.js"
+            integrity="sha384-+JAeTqUiH9WuByObPHouP4rQKYUTLQ9AQW4HHJZ4uNmkA2+nkDpbssQNGsVXnJpe"
+            crossorigin="anonymous"></script>
 </head>
 <body>
     <header id="status-bar">
@@ -18,6 +20,9 @@
             <span class="brand-sub">LINEAGE</span>
         </div>
         <div class="status-right">
+            <button class="theme-toggle" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+                <span id="theme-icon">&#9788;</span>
+            </button>
             <div class="status-pill" id="status-pill">
                 <span class="status-dot" id="status-dot"></span>
                 <span id="status-label">connecting</span>
@@ -36,6 +41,6 @@
     <main id="app">
         <div id="content"></div>
     </main>
-    <script src="/lineage/app.js"></script>
+    <script src="/lineage/app.js?v=2"></script>
 </body>
 </html>

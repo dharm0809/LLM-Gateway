@@ -278,12 +278,89 @@ async def control_status(request: Request) -> JSONResponse:
     else:
         status["sync_mode"] = "local"
 
+    # Auth & security
+    status["auth_mode"] = settings.auth_mode
+    status["jwt_configured"] = bool(settings.jwt_secret or settings.jwt_jwks_url)
+
+    # Content analyzers
+    if ctx.content_analyzers:
+        status["content_analyzers"] = {
+            "count": len(ctx.content_analyzers),
+            "types": [type(a).__name__ for a in ctx.content_analyzers],
+        }
+
+    # Configured providers
+    providers = []
+    if settings.provider_ollama_url:
+        providers.append({"name": "ollama", "url": settings.provider_ollama_url})
+    if settings.provider_openai_key:
+        providers.append({"name": "openai", "url": settings.provider_openai_url})
+    if settings.provider_anthropic_key:
+        providers.append({"name": "anthropic", "url": settings.provider_anthropic_url})
+    if settings.provider_huggingface_key:
+        providers.append({"name": "huggingface", "url": settings.provider_huggingface_url})
+    status["providers"] = providers
+
+    # Model routing
+    if settings.model_routing_json:
+        status["model_routes_count"] = len(settings.model_routes)
+
+    # Session chain
+    if ctx.session_chain:
+        try:
+            count = ctx.session_chain.active_session_count()
+            status["session_chain"] = {"active_sessions": count}
+        except Exception:
+            logger.debug("control_status: session_chain unavailable", exc_info=True)
+
+    # Token budget
+    if ctx.budget_tracker and settings.token_budget_enabled:
+        try:
+            snapshot = await ctx.budget_tracker.get_snapshot(settings.gateway_tenant_id)
+            if snapshot:
+                status["token_budget"] = snapshot
+        except Exception:
+            logger.debug("control_status: token_budget unavailable", exc_info=True)
+
+    # Lineage
+    status["lineage_enabled"] = settings.lineage_enabled
+
     # Model capabilities
     try:
         from gateway.pipeline.orchestrator import _model_capabilities
         if _model_capabilities:
             status["model_capabilities"] = dict(_model_capabilities)
     except Exception:
-        pass
+        logger.debug("control_status: model_capabilities unavailable", exc_info=True)
 
     return JSONResponse(status)
+
+
+# ── Discovery endpoint ────────────────────────────────────────
+
+async def control_discover_models(request: Request) -> JSONResponse:
+    """GET /v1/control/discover — scan providers for available models."""
+    store = _store_or_503()
+    if store is None:
+        return JSONResponse({"error": "Control plane not available"}, status_code=503)
+    ctx = get_pipeline_context()
+    settings = get_settings()
+    if not ctx.http_client:
+        return JSONResponse({"error": "HTTP client not initialized"}, status_code=503)
+    try:
+        from gateway.control.discovery import discover_provider_models
+
+        discovered = await discover_provider_models(settings, ctx.http_client)
+
+        # Mark which models are already registered
+        tenant_id = _tenant(request)
+        attestations = store.list_attestations(tenant_id)
+        registered_ids = {a["model_id"] for a in attestations}
+
+        for m in discovered:
+            m["registered"] = m["model_id"] in registered_ids
+
+        return JSONResponse({"models": discovered, "count": len(discovered)})
+    except Exception as e:
+        logger.error("control_discover_models error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)

@@ -44,7 +44,8 @@ def _create_wal_db(db_path: str):
             path          TEXT    NOT NULL,
             disposition   TEXT    NOT NULL,
             execution_id  TEXT,
-            status_code   INTEGER NOT NULL
+            status_code   INTEGER NOT NULL,
+            user          TEXT
         )"""
     )
     conn.commit()
@@ -307,3 +308,132 @@ def test_list_sessions_pagination(wal_db):
     assert len(page1) == 2
     assert len(page2) == 2
     assert len(page3) == 1
+
+
+def _insert_recent_attempts(conn, count: int = 5):
+    """Insert gateway_attempts with current timestamps so datetime('now', ...) filters work."""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    for i in range(count):
+        ts = (now - timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        disp = "forwarded" if i < 3 else "denied_auth"
+        conn.execute(
+            """INSERT INTO gateway_attempts
+               (request_id, timestamp, tenant_id, provider, model_id, path, disposition, execution_id, status_code)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (f"recent-{i}", ts, "test-tenant", "ollama", "qwen3:4b",
+             "/v1/chat/completions", disp, f"exec-recent-{i}" if i < 3 else None, 200 if i < 3 else 403),
+        )
+    conn.commit()
+
+
+def test_get_metrics_history_returns_buckets(wal_db):
+    db_path, conn = wal_db
+    _insert_recent_attempts(conn, count=5)
+
+    reader = LineageReader(db_path)
+    result = reader.get_metrics_history("1h")
+    reader.close()
+
+    assert result["range"] == "1h"
+    assert isinstance(result["buckets"], list)
+    total = sum(b["total"] for b in result["buckets"])
+    assert total == 5
+    total_allowed = sum(b["allowed"] for b in result["buckets"])
+    assert total_allowed == 3  # 3 forwarded
+    total_blocked = sum(b["blocked"] for b in result["buckets"])
+    assert total_blocked == 2  # 2 denied_auth
+
+
+def test_get_metrics_history_invalid_range_defaults_to_1h(wal_db):
+    db_path, conn = wal_db
+    _insert_recent_attempts(conn, count=3)
+
+    reader = LineageReader(db_path)
+    result = reader.get_metrics_history("invalid")
+    reader.close()
+
+    assert result["range"] == "1h"
+
+
+def test_get_metrics_history_empty(wal_db):
+    db_path, conn = wal_db
+
+    reader = LineageReader(db_path)
+    result = reader.get_metrics_history("7d")
+    reader.close()
+
+    assert result["range"] == "7d"
+    assert result["buckets"] == []
+
+
+# ---------------------------------------------------------------------------
+# Token + Latency History Tests
+# ---------------------------------------------------------------------------
+
+def _insert_recent_execution_records(conn, count: int = 4):
+    """Insert wal_records with token + latency fields and current timestamps."""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    for i in range(count):
+        eid = f"exec-tl-{i}"
+        ts = (now - timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        record = {
+            "execution_id": eid,
+            "session_id": "session-tl",
+            "model_attestation_id": "test-model",
+            "model_id": "qwen3:4b",
+            "timestamp": ts,
+            "prompt_tokens": 100 + i * 10,
+            "completion_tokens": 50 + i * 5,
+            "total_tokens": 150 + i * 15,
+            "latency_ms": 200.0 + i * 50,
+        }
+        conn.execute(
+            "INSERT INTO wal_records (execution_id, record_json, created_at) VALUES (?, ?, ?)",
+            (eid, json.dumps(record), ts),
+        )
+    conn.commit()
+
+
+def test_get_token_latency_history_returns_buckets(wal_db):
+    db_path, conn = wal_db
+    _insert_recent_execution_records(conn, count=4)
+
+    reader = LineageReader(db_path)
+    result = reader.get_token_latency_history("1h")
+    reader.close()
+
+    assert result["range"] == "1h"
+    assert isinstance(result["buckets"], list)
+    assert len(result["buckets"]) > 0
+
+    total_prompt = sum(b["prompt_tokens"] for b in result["buckets"])
+    assert total_prompt == 100 + 110 + 120 + 130  # 460
+    total_completion = sum(b["completion_tokens"] for b in result["buckets"])
+    assert total_completion == 50 + 55 + 60 + 65  # 230
+    total_requests = sum(b["request_count"] for b in result["buckets"])
+    assert total_requests == 4
+
+
+def test_get_token_latency_history_empty(wal_db):
+    db_path, conn = wal_db
+
+    reader = LineageReader(db_path)
+    result = reader.get_token_latency_history("24h")
+    reader.close()
+
+    assert result["range"] == "24h"
+    assert result["buckets"] == []
+
+
+def test_get_token_latency_history_invalid_range(wal_db):
+    db_path, conn = wal_db
+    _insert_recent_execution_records(conn, count=2)
+
+    reader = LineageReader(db_path)
+    result = reader.get_token_latency_history("bogus")
+    reader.close()
+
+    assert result["range"] == "1h"
+    assert isinstance(result["buckets"], list)

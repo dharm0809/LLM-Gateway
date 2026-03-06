@@ -34,11 +34,18 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     )),
 ]
 
+# High-risk PII types that BLOCK the request (credentials, financial, identity documents).
+# Low-risk types (ip_address, email_address, phone_number) get WARN — they commonly appear
+# in educational/technical LLM responses (e.g. "Google's IP is 142.250.184.14").
+_BLOCK_PII_TYPES = {"credit_card", "ssn", "aws_access_key", "api_key"}
+
 
 class PIIDetector(ContentAnalyzer):
     """
     Regex-based PII detector. Checks for email, phone, SSN, credit card, IP, AWS keys, API tokens.
-    Returns BLOCK on first match with confidence 0.99. No content stored or logged.
+    Returns BLOCK for high-risk PII (credit_card, ssn, aws_access_key, api_key).
+    Returns WARN for low-risk PII (email_address, phone_number, ip_address).
+    No content stored or logged.
     """
 
     @property
@@ -52,8 +59,9 @@ class PIIDetector(ContentAnalyzer):
     async def analyze(self, text: str) -> Decision:
         for name, pattern in _PATTERNS:
             if pattern.search(text):
+                verdict = Verdict.BLOCK if name in _BLOCK_PII_TYPES else Verdict.WARN
                 return Decision(
-                    verdict=Verdict.BLOCK,
+                    verdict=verdict,
                     confidence=0.99,
                     analyzer_id=self.analyzer_id,
                     category="pii",

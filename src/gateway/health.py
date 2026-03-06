@@ -80,6 +80,10 @@ async def health_response(request: Request) -> JSONResponse:
         if snapshot:
             payload["token_budget"] = snapshot
 
+    # Content analyzers count
+    if ctx.content_analyzers:
+        payload["content_analyzers"] = len(ctx.content_analyzers)
+
     # Phase 13: session chain
     if ctx.session_chain:
         count = ctx.session_chain.active_session_count()

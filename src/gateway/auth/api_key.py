@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -16,6 +18,11 @@ def get_api_key_from_request(request: Request) -> str | None:
     return request.headers.get("X-API-Key", "").strip() or None
 
 
+def _constant_time_key_check(key: str, api_keys_list: list[str]) -> bool:
+    """Check if key matches any configured key using constant-time comparison."""
+    return any(hmac.compare_digest(key, valid_key) for valid_key in api_keys_list)
+
+
 def require_api_key_if_configured(request: Request, api_keys_list: list[str]) -> JSONResponse | None:
     """
     If api_keys_list is non-empty, require a valid API key on the request.
@@ -25,7 +32,7 @@ def require_api_key_if_configured(request: Request, api_keys_list: list[str]) ->
     if not api_keys_list:
         return None
     key = get_api_key_from_request(request)
-    if key and key in api_keys_list:
+    if key and _constant_time_key_check(key, api_keys_list):
         return None
     disposition_var.set("denied_auth")
     return JSONResponse(

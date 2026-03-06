@@ -71,6 +71,10 @@ budget_exceeded_total = Counter(
     "Requests rejected due to token budget exhaustion",
     ["tenant_id"],
 )
+budget_failopen_total = Counter(
+    "walacor_gateway_budget_failopen_total",
+    "Requests allowed due to budget check failure (fail-open)",
+)
 
 # Phase 13: Session chain (G5)
 session_chain_active = Gauge(

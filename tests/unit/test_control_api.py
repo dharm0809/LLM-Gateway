@@ -55,6 +55,9 @@ def _make_ctx(store, attestation_cache=None, policy_cache=None, budget_tracker=N
     ctx.budget_tracker = budget_tracker
     ctx.sync_client = sync_client
     ctx.wal_writer = wal_writer
+    ctx.content_analyzers = []
+    ctx.session_chain = None
+    ctx.http_client = None
     return ctx
 
 
@@ -65,6 +68,19 @@ def _make_settings(tenant_id="test-tenant"):
     settings.enforcement_mode = "enforced"
     settings.skip_governance = False
     settings.control_plane_url = ""
+    settings.auth_mode = "api_key"
+    settings.jwt_secret = ""
+    settings.jwt_jwks_url = ""
+    settings.provider_ollama_url = ""
+    settings.provider_openai_key = ""
+    settings.provider_openai_url = ""
+    settings.provider_anthropic_key = ""
+    settings.provider_anthropic_url = ""
+    settings.provider_huggingface_key = ""
+    settings.provider_huggingface_url = ""
+    settings.model_routing_json = ""
+    settings.token_budget_enabled = False
+    settings.lineage_enabled = True
     return settings
 
 

@@ -66,7 +66,13 @@ class WALWriter:
                 "CREATE INDEX IF NOT EXISTS idx_gateway_attempts_tenant_disp"
                 " ON gateway_attempts (tenant_id, disposition)"
             )
-            self._conn.commit()
+            # Phase 21: add user column to gateway_attempts (non-destructive migration)
+            try:
+                self._conn.execute("ALTER TABLE gateway_attempts ADD COLUMN user TEXT")
+                self._conn.commit()
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise  # Only suppress "duplicate column" errors
         return self._conn
 
     def write_and_fsync(self, record: ExecutionRecord | dict[str, Any]) -> None:
@@ -144,18 +150,19 @@ class WALWriter:
         provider: str | None = None,
         model_id: str | None = None,
         execution_id: str | None = None,
+        user: str | None = None,
     ) -> None:
         """Append one row to gateway_attempts for the completeness invariant."""
         conn = self._ensure_conn()
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             """INSERT OR REPLACE INTO gateway_attempts
-               (request_id, timestamp, tenant_id, provider, model_id, path, disposition, execution_id, status_code)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (request_id, now, tenant_id, provider or None, model_id or None, path, disposition, execution_id or None, status_code),
+               (request_id, timestamp, tenant_id, provider, model_id, path, disposition, execution_id, status_code, user)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (request_id, now, tenant_id, provider or None, model_id or None, path, disposition, execution_id or None, status_code, user or None),
         )
         conn.commit()
-        logger.debug("gateway_attempts request_id=%s disposition=%s", request_id, disposition)
+        logger.debug("gateway_attempts request_id=%s disposition=%s user=%s", request_id, disposition, user)
 
     def write_tool_event(self, record: dict[str, Any]) -> None:
         """Append one tool event record to wal_records using event_id as the primary key."""

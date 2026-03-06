@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 redis = ["redis>=5.0"]
+auth = ["pyjwt[crypto]>=2.8"]
 telemetry = [
   "opentelemetry-sdk>=1.30",
   "opentelemetry-exporter-otlp-proto-grpc>=1.30",

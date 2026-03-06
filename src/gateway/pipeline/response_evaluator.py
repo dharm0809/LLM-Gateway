@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _run_analyzer(analyzer: ContentAnalyzer, text: str) -> Decision | None:
-    """Run a single analyzer under its declared timeout. Returns None on timeout."""
+    """Run a single analyzer under its declared timeout. Returns fail-open Decision on timeout/error."""
     try:
         return await asyncio.wait_for(
             analyzer.analyze(text),
@@ -23,14 +23,26 @@ async def _run_analyzer(analyzer: ContentAnalyzer, text: str) -> Decision | None
         )
     except asyncio.TimeoutError:
         logger.warning(
-            "Content analyzer %s timed out after %dms — skipping",
+            "Content analyzer %s timed out after %dms — returning fail-open PASS",
             analyzer.analyzer_id,
             analyzer.timeout_ms,
         )
-        return None
+        return Decision(
+            analyzer_id=analyzer.analyzer_id,
+            verdict=Verdict.PASS,
+            confidence=0.0,
+            category="timeout",
+            reason=f"analyzer timed out after {analyzer.timeout_ms}ms",
+        )
     except Exception as e:
-        logger.warning("Content analyzer %s raised: %s", analyzer.analyzer_id, e)
-        return None
+        logger.warning("Content analyzer %s raised: %s — returning fail-open PASS", analyzer.analyzer_id, e)
+        return Decision(
+            analyzer_id=analyzer.analyzer_id,
+            verdict=Verdict.PASS,
+            confidence=0.0,
+            category="error",
+            reason=f"analyzer error: {e}",
+        )
 
 
 async def analyze_text(text: str, analyzers: list[ContentAnalyzer]) -> list[dict]:
@@ -60,7 +72,11 @@ async def evaluate_post_inference(
     analyzers: list[ContentAnalyzer],
 ) -> tuple[bool, int, str, list[dict], JSONResponse | None]:
     """
-    Run all content analyzers on model_response.content.
+    Run all content analyzers on model_response.content (or thinking_content as fallback).
+
+    When thinking strip moves all model output to thinking_content (e.g. qwen3:4b),
+    content may be empty. We analyse whatever text the model actually produced so that
+    safety classifiers (Llama Guard, PII, toxicity) still fire.
 
     Returns:
         (blocked, response_policy_version, response_policy_result, analyzer_decisions, error_or_none)
@@ -69,12 +85,15 @@ async def evaluate_post_inference(
         — labels only, no content.
     response_policy_result: "pass" | "blocked" | "flagged" | "skipped"
     """
-    if not analyzers or not model_response.content:
+    # Use visible content; fall back to thinking_content for thinking-enabled models
+    # where strip_thinking_tokens moved everything to thinking_content.
+    text_to_analyze = model_response.content or model_response.thinking_content
+    if not analyzers or not text_to_analyze:
         return False, policy_cache.version, "skipped", [], None
 
     # Run all analyzers concurrently, each under its own timeout
     results: list[Decision | None] = await asyncio.gather(
-        *[_run_analyzer(a, model_response.content) for a in analyzers]
+        *[_run_analyzer(a, text_to_analyze) for a in analyzers]
     )
 
     decisions = [r for r in results if r is not None]
