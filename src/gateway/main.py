@@ -50,6 +50,7 @@ from gateway.control.sync_api import (
     sync_policies,
 )
 from gateway.models_api import list_models
+from gateway.compliance.api import compliance_export
 
 from gateway.util.json_logger import configure_json_logging
 configure_json_logging(os.environ.get("WALACOR_LOG_LEVEL", "INFO"))
@@ -669,6 +670,8 @@ def create_app() -> Starlette:
         Route("/v1/policies", sync_policies, methods=["GET"]),
         # Models API (OpenAI-compatible)
         Route("/v1/models", list_models, methods=["GET"]),
+        # Compliance export
+        Route("/v1/compliance/export", compliance_export, methods=["GET"]),
         # Proxy routes
         Route("/v1/chat/completions", catch_all_post, methods=["POST"]),
         Route("/v1/chat/completions/", catch_all_post, methods=["POST"]),
