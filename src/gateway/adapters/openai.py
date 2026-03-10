@@ -18,6 +18,7 @@ import httpx
 from starlette.requests import Request
 
 from gateway.adapters.base import ModelCall, ModelResponse, ProviderAdapter, ToolInteraction
+from gateway.adapters.caching import detect_cache_hit
 
 
 def _concat_messages(messages: list[dict]) -> str:
@@ -329,9 +330,14 @@ class OpenAIAdapter(ProviderAdapter):
         content = (cc_content + ra_text).strip() if ra_text else cc_content
         tool_interactions = cc_tools + ra_tools
 
+        usage = data.get("usage")
+        if usage:
+            cache_info = detect_cache_hit(usage)
+            usage = {**usage, **cache_info}
+
         return ModelResponse(
             content=content,
-            usage=data.get("usage"),
+            usage=usage,
             raw_body=response.content,
             provider_request_id=data.get("id"),
             tool_interactions=tool_interactions if tool_interactions else None,

@@ -55,4 +55,7 @@ def build_execution_record(
         "total_tokens": usage.get("total_tokens") or 0,
         "retry_of": retry_of,
         "timings": timings,
+        "cache_hit": usage.get("cache_hit", False),
+        "cached_tokens": usage.get("cached_tokens", 0),
+        "cache_creation_tokens": usage.get("cache_creation_tokens", 0),
     }
