@@ -12,6 +12,7 @@ from starlette.background import BackgroundTask
 
 from gateway.adapters.base import ModelCall, ModelResponse, ProviderAdapter
 from gateway.config import get_settings
+from gateway.content.stream_safety import check_stream_safety
 from gateway.pipeline.context import get_pipeline_context
 from gateway.metrics.prometheus import forward_duration
 
@@ -131,12 +132,19 @@ async def stream_with_tee(
 
     async def generate():
         buffer_size = 0
+        accumulated_text = ""
         _exc: BaseException | None = None
         try:
             async for chunk in upstream.aiter_bytes():
                 if buffer_size < max_buffer:
                     buffer.append(chunk)
                     buffer_size += len(chunk)
+                # Mid-stream S4 safety check
+                accumulated_text += chunk.decode("utf-8", errors="replace")
+                if check_stream_safety(accumulated_text):
+                    logger.warning("S4 safety abort triggered mid-stream")
+                    yield b'event: error\ndata: {"error": "content_safety", "message": "Response blocked by safety filter (S4)"}\n\n'
+                    return
                 yield chunk
         except BaseException as e:
             _exc = e
