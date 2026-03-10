@@ -96,5 +96,23 @@ tool_loop_iterations = Histogram(
 )
 
 
+# Phase 26: Rate limiting + alerting
+budget_utilization_ratio = Gauge(
+    "walacor_gateway_budget_utilization_ratio",
+    "Budget utilization ratio 0-1",
+    ["tenant_id"],
+)
+content_blocks_total = Counter(
+    "walacor_gateway_content_blocks_total",
+    "Content analysis blocks by analyzer",
+    ["analyzer"],
+)
+rate_limit_hits_total = Counter(
+    "walacor_gateway_rate_limit_hits_total",
+    "Rate limit 429 responses by model",
+    ["model"],
+)
+
+
 def get_metrics_content() -> bytes:
     return generate_latest(REGISTRY)

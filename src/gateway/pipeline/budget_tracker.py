@@ -334,7 +334,7 @@ class RedisBudgetTracker:
         return []
 
 
-def make_budget_tracker(redis_client, settings):
+def make_budget_tracker(redis_client, settings, alert_bus=None, alert_thresholds=None):
     """Return Redis-backed tracker if redis_client is provided, else in-memory."""
     if redis_client is not None:
         return RedisBudgetTracker(
@@ -342,4 +342,4 @@ def make_budget_tracker(redis_client, settings):
             settings.token_budget_period,
             settings.token_budget_max_tokens,
         )
-    return BudgetTracker()
+    return BudgetTracker(alert_bus=alert_bus, alert_thresholds=alert_thresholds)

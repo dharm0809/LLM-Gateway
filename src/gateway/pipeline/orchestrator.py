@@ -41,6 +41,7 @@ from gateway.metrics.prometheus import (
     requests_total, pipeline_duration, response_policy_total,
     token_usage_total, budget_exceeded_total,
     tool_calls_total, tool_loop_iterations,
+    rate_limit_hits_total, content_blocks_total,
 )
 
 logger = logging.getLogger(__name__)
@@ -971,6 +972,10 @@ async def _rate_limit_check(request, ctx, settings, call, provider, model) -> Re
     if not allowed:
         _set_disposition(request, "denied_rate_limit")
         _inc_request(provider, model, "error")
+        try:
+            rate_limit_hits_total.labels(model=call.model_id).inc()
+        except Exception:
+            logger.debug("Metric increment failed (rate_limit_hits_total)", exc_info=True)
         retry_after = max(1, request.state.walacor_ratelimit_reset - int(time.time()))
         resp = JSONResponse(
             {"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}},
@@ -1192,6 +1197,13 @@ async def _run_response_policy(
 
     _set_disposition(request, "denied_response_policy")
     _inc_request(provider, model, "blocked_response_policy")
+    # Increment per-analyzer content block counters
+    for d in (decisions or []):
+        if d.get("action") == "block":
+            try:
+                content_blocks_total.labels(analyzer=d.get("analyzer", "unknown")).inc()
+            except Exception:
+                logger.debug("Metric increment failed (content_blocks_total)", exc_info=True)
     pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
     return rp_version, rp_result, decisions, whb, reason, resp_err
 

@@ -57,6 +57,7 @@ class PipelineContext:
         # Phase 26: Rate limiting + alerting
         self.rate_limiter: Any | None = None
         self.alert_bus: Any | None = None
+        self.alert_bus_task: Any | None = None
 
 
 _ctx = PipelineContext()

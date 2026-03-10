@@ -341,7 +341,9 @@ def _init_budget_tracker(settings, ctx) -> None:
     """Phase 11: token budget tracker (in-memory or Redis-backed)."""
     from gateway.pipeline.budget_tracker import make_budget_tracker
 
-    ctx.budget_tracker = make_budget_tracker(ctx.redis_client, settings)
+    # Parse alert thresholds and pass alert_bus to in-memory tracker
+    alert_thresholds = [int(t.strip()) for t in settings.alert_budget_thresholds.split(",") if t.strip()]
+    ctx.budget_tracker = make_budget_tracker(ctx.redis_client, settings, alert_bus=ctx.alert_bus, alert_thresholds=alert_thresholds)
     if settings.token_budget_enabled and settings.token_budget_max_tokens > 0:
         if ctx.redis_client is None:
             # In-memory tracker supports synchronous configure
@@ -450,6 +452,42 @@ def _init_control_plane(settings, ctx) -> None:
     logger.info("Embedded control plane ready: %s", db_path)
 
 
+def _init_alert_bus(settings, ctx) -> None:
+    """Phase 26: Alert event bus with webhook/Slack/PagerDuty dispatchers."""
+    from gateway.alerts.bus import AlertBus
+    from gateway.alerts.dispatcher import WebhookDispatcher, SlackDispatcher, PagerDutyDispatcher
+
+    bus = AlertBus()
+    for url in (u.strip() for u in settings.webhook_urls.split(",") if u.strip()):
+        if "hooks.slack.com" in url:
+            bus.add_dispatcher(SlackDispatcher(url))
+        else:
+            bus.add_dispatcher(WebhookDispatcher(url))
+    if settings.pagerduty_routing_key:
+        bus.add_dispatcher(PagerDutyDispatcher(settings.pagerduty_routing_key))
+    ctx.alert_bus = bus
+    logger.info(
+        "Alert bus ready: %d dispatcher(s)",
+        len(bus._dispatchers),
+    )
+
+
+def _init_rate_limiter(settings, ctx) -> None:
+    """Phase 26: Request rate limiter (in-memory or Redis-backed)."""
+    from gateway.pipeline.rate_limiter import SlidingWindowRateLimiter, RedisRateLimiter
+
+    if ctx.redis_client is not None:
+        ctx.rate_limiter = RedisRateLimiter(ctx.redis_client)
+    else:
+        ctx.rate_limiter = SlidingWindowRateLimiter()
+    logger.info(
+        "Rate limiter enabled: type=%s rpm=%d per_model=%s",
+        type(ctx.rate_limiter).__name__,
+        settings.rate_limit_rpm,
+        settings.rate_limit_per_model,
+    )
+
+
 def _init_load_balancer(settings, ctx) -> None:
     """Phase 25: Initialize load balancer and circuit breakers from model_groups_json."""
     from gateway.routing.balancer import Endpoint, LoadBalancer, ModelGroup
@@ -547,8 +585,11 @@ async def on_startup() -> None:
         _init_content_analyzers(settings, ctx)
         if settings.llama_guard_enabled:
             _init_llama_guard(settings, ctx)
+        _init_alert_bus(settings, ctx)
         _init_budget_tracker(settings, ctx)
         _init_session_chain(settings, ctx)
+        if settings.rate_limit_enabled:
+            _init_rate_limiter(settings, ctx)
         if settings.tool_aware_enabled and settings.mcp_servers_json:
             await _init_tool_registry(settings, ctx)
         if settings.tool_aware_enabled and settings.web_search_enabled:
@@ -565,6 +606,9 @@ async def on_startup() -> None:
                 "control plane mutations (attestations, policies, budgets) are accessible without authentication"
             )
         await _self_test()
+        # Start alert bus background consumer
+        if ctx.alert_bus and ctx.alert_bus._dispatchers:
+            ctx.alert_bus_task = asyncio.create_task(ctx.alert_bus.run())
         if ctx.sync_client:
             ctx.sync_loop_task = asyncio.create_task(_run_sync_loop(settings, ctx))
         elif settings.control_plane_enabled:
@@ -657,6 +701,15 @@ async def on_shutdown() -> None:
             pass
         except Exception as e:
             errors.append(f"local_sync_task: {e}")
+
+    if ctx.alert_bus_task and not ctx.alert_bus_task.done():
+        ctx.alert_bus_task.cancel()
+        try:
+            await ctx.alert_bus_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            errors.append(f"alert_bus_task: {e}")
 
     if ctx.control_store:
         try:

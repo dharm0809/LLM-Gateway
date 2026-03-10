@@ -1008,6 +1008,57 @@ Provider errors are classified and routed accordingly:
 
 Retry attempts are linked via the `retry_of` field in execution records, enabling audit trail reconstruction across retry chains.
 
+## Rate limiting and alerting (Phase 26)
+
+### Request rate limiting
+
+The gateway enforces per-user request rate limits using a sliding window algorithm. Configure via environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `WALACOR_RATE_LIMIT_ENABLED` | `false` | Enable request rate limiting |
+| `WALACOR_RATE_LIMIT_RPM` | `60` | Requests per minute limit |
+| `WALACOR_RATE_LIMIT_PER_MODEL` | `true` | Rate limit per user+model (vs per user only) |
+
+When a request exceeds the rate limit, the gateway returns HTTP 429 with standard headers:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 12
+X-RateLimit-Limit: 60
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1741640000
+```
+
+Successful responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers. The rate limiter supports both in-memory (single-node) and Redis-backed (multi-replica) modes.
+
+### Alert event bus
+
+The gateway emits alerts for budget threshold crossings and dispatches them to external systems:
+
+| Variable | Default | Description |
+|---|---|---|
+| `WALACOR_WEBHOOK_URLS` | `""` | Comma-separated webhook URLs for alerts |
+| `WALACOR_PAGERDUTY_ROUTING_KEY` | `""` | PagerDuty Events API v2 routing key |
+| `WALACOR_ALERT_BUDGET_THRESHOLDS` | `70,90,100` | Budget usage % thresholds for alerts |
+
+**Dispatchers:**
+- **Webhook** — generic JSON POST to any URL
+- **Slack** — Block Kit formatted messages (auto-detected from `hooks.slack.com` URLs)
+- **PagerDuty** — Events API v2 with severity mapping (info/warning/critical)
+
+Budget threshold alerts fire once per threshold per budget period. The alert bus uses an async queue with fail-open semantics — alert delivery failures never block request processing.
+
+### Prometheus metrics (Phase 26)
+
+New metrics for monitoring rate limiting and content analysis:
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `walacor_gateway_rate_limit_hits_total` | Counter | `model` | Rate limit 429 responses |
+| `walacor_gateway_content_blocks_total` | Counter | `analyzer` | Content analysis blocks |
+| `walacor_gateway_budget_utilization_ratio` | Gauge | `tenant_id` | Budget utilization 0-1 |
+
 ---
 
 ## Roadmap
@@ -1023,8 +1074,8 @@ Before forwarding a request, call a configurable webhook that receives the promp
 ### Trusted Execution Environment (TEE) deployment mode
 Run the gateway inside an AWS Nitro Enclave or Azure Confidential Container, with remote attestation of the gateway process itself. Combined with G1 model attestation, this closes the remaining trust gap: the gateway's integrity is verifiable by the control plane, not just assumed.
 
-### Per-user token budgets and quota API
-The embedded control plane now provides a budget CRUD API (`/v1/control/budgets`) with per-user granularity and dynamic updates (no restart required). The remaining piece is a public-facing quota API with rate-limit headers and usage reporting for product-level metering.
+### Per-user quota API
+The embedded control plane provides budget CRUD (`/v1/control/budgets`) with per-user granularity and dynamic updates. Rate limiting (Phase 26) adds `X-RateLimit-*` headers on every response. The remaining piece is a public-facing quota API endpoint with usage reporting for product-level metering.
 
 ---
 
