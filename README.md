@@ -432,6 +432,7 @@ Requires the `opentelemetry-sdk`, `opentelemetry-exporter-otlp`, and `openteleme
 | `/v1/messages` | POST | Anthropic Messages proxy |
 | `/v1/custom` | POST | Generic adapter proxy |
 | `/generate` | POST | HuggingFace inference proxy |
+| `/v1/models` | GET | OpenAI-compatible model listing (from attested models) |
 | `/health` | GET | JSON health status |
 | `/metrics` | GET | Prometheus text format metrics |
 | `/lineage/` | GET | Lineage dashboard (HTML SPA) |
@@ -879,6 +880,35 @@ The gateway supports full governance mode without a control plane service. When 
 | **Completeness** | Fully operational. |
 
 This mode is designed for deployments where all models are trusted (e.g., on-premise Ollama) and the organization wants governance enforcement (content analysis, budgets, session chains, audit trail) without deploying a separate control plane service. When a control plane becomes available, set `WALACOR_CONTROL_PLANE_URL` to enable centrally managed attestations and policies.
+
+---
+
+## OpenAI compatibility layer (Phase 23)
+
+### GET /v1/models
+
+Returns an OpenAI-compatible model list from the embedded control plane's attested models. Only models with `status: active` are included; revoked models are filtered out. The endpoint requires no authentication and is excluded from completeness tracking.
+
+```json
+{"object": "list", "data": [{"id": "qwen3:4b", "object": "model", "created": 1741600000, "owned_by": "ollama"}]}
+```
+
+### Governance response headers
+
+Non-streaming responses include `X-Walacor-*` headers for client-side audit correlation:
+
+| Header | Description |
+|---|---|
+| `X-Walacor-Execution-Id` | Unique execution record identifier |
+| `X-Walacor-Attestation-Id` | Model attestation used for this request |
+| `X-Walacor-Chain-Seq` | Session chain sequence number |
+| `X-Walacor-Policy-Result` | Pre-inference policy result (`allowed`, `denied`, etc.) |
+
+For streaming responses, an `event: governance` SSE event is emitted after `data: [DONE]` with the same fields in a JSON payload.
+
+### SSE keepalives
+
+The streaming forwarder includes an `sse_keepalive_generator` that yields `: keepalive\n\n` SSE comment lines at 15-second intervals. This prevents proxy/load-balancer idle timeouts during long-running model inferences.
 
 ---
 
