@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     toxicity_detection_enabled: bool = Field(default=False, description="Enable built-in toxicity detector (walacor.toxicity.v1)")
     toxicity_deny_terms: str = Field(default="", description="Comma-separated extra deny-list terms for toxicity detector")
 
+    # Phase 28: Prompt caching
+    prompt_caching_enabled: bool = Field(
+        default=True,
+        description="Auto-inject Anthropic cache_control breakpoints on system messages.",
+    )
+
     # Phase 17: Reasoning model support
     thinking_strip_enabled: bool = Field(
         default=True,

@@ -19,6 +19,7 @@ import httpx
 from starlette.requests import Request
 
 from gateway.adapters.base import ModelCall, ModelResponse, ProviderAdapter, ToolInteraction
+from gateway.adapters.caching import detect_cache_hit, inject_cache_control
 
 
 def _concat_messages_anthropic(messages: list[dict]) -> str:
@@ -128,9 +129,10 @@ def _handle_stream_event(
 class AnthropicAdapter(ProviderAdapter):
     """Adapter for Anthropic /v1/messages API."""
 
-    def __init__(self, base_url: str, api_key: str) -> None:
+    def __init__(self, base_url: str, api_key: str, *, prompt_caching: bool = True) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
+        self._prompt_caching = prompt_caching
 
     def get_provider_name(self) -> str:
         return "anthropic"
@@ -195,11 +197,23 @@ class AnthropicAdapter(ProviderAdapter):
         headers.pop("content-length", None)
         if self._api_key and "x-api-key" not in [h.lower() for h in headers]:
             headers["x-api-key"] = self._api_key
+
+        body = call.raw_body
+        if self._prompt_caching:
+            try:
+                data = json.loads(body)
+                messages = data.get("messages")
+                if messages:
+                    data["messages"] = inject_cache_control(messages)
+                    body = json.dumps(data).encode("utf-8")
+            except (json.JSONDecodeError, TypeError):
+                pass  # forward original body on parse failure
+
         return httpx.Request(
             method=original.method,
             url=url,
             headers=headers,
-            content=call.raw_body,
+            content=body,
         )
 
     def parse_response(self, response: httpx.Response) -> ModelResponse:
@@ -221,9 +235,14 @@ class AnthropicAdapter(ProviderAdapter):
 
         has_pending = stop_reason == "tool_use" and bool(tool_interactions)
 
+        usage = data.get("usage")
+        if usage and self._prompt_caching:
+            cache_info = detect_cache_hit(usage)
+            usage = {**usage, **cache_info}
+
         return ModelResponse(
             content="".join(text_parts),
-            usage=data.get("usage"),
+            usage=usage,
             raw_body=response.content,
             provider_request_id=data.get("id"),
             tool_interactions=tool_interactions if tool_interactions else None,
