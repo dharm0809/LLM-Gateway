@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import httpx
@@ -30,6 +31,13 @@ def build_governance_sse_event(execution_id=None, attestation_id=None, chain_seq
     if policy_result:
         payload["policy_result"] = policy_result
     return f"event: governance\ndata: {_json.dumps(payload)}\n\n".encode()
+
+
+async def sse_keepalive_generator(interval_seconds: float = 15.0):
+    """Yield SSE comment keepalives at a regular interval."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        yield b": keepalive\n\n"
 
 
 def _http_client() -> httpx.AsyncClient:
