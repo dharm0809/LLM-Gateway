@@ -83,6 +83,18 @@ def _inc_request(provider: str, model: str, outcome: str) -> None:
         logger.debug("Metric increment failed (requests_total)", exc_info=True)
 
 
+def _add_governance_headers(response, execution_id=None, attestation_id=None, chain_seq=None, policy_result=None):
+    """Add X-Walacor-* governance metadata headers to response."""
+    if execution_id:
+        response.headers["x-walacor-execution-id"] = str(execution_id)
+    if attestation_id:
+        response.headers["x-walacor-attestation-id"] = str(attestation_id)
+    if chain_seq is not None:
+        response.headers["x-walacor-chain-seq"] = str(chain_seq)
+    if policy_result:
+        response.headers["x-walacor-policy-result"] = str(policy_result)
+
+
 async def _peek_model_id(request: Request) -> str:
     """Extract model field from request body without consuming it."""
     try:
@@ -1091,6 +1103,8 @@ async def _build_and_write_record(
     )
     record_hash_val = await _apply_session_chain(record, session_id, ctx, settings)
     await _store_execution(record, request, ctx)
+    # Expose governance metadata for response headers (Phase 23)
+    request.state.walacor_chain_seq = record.get("sequence_number")
     await _write_tool_events(params.tool_interactions, record["execution_id"], call, params.tool_strategy, ctx, settings)
     if session_id and ctx.session_chain and record_hash_val is not None:
         try:
@@ -1354,4 +1368,13 @@ async def handle_request(request: Request) -> Response:
     pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
     outcome = "audit_only_allowed" if (is_audit_only and whb) else "allowed"
     _inc_request(provider, model, outcome)
+
+    # Phase 23: governance response headers (non-streaming)
+    _add_governance_headers(
+        http_response,
+        execution_id=getattr(request.state, "walacor_execution_id", None),
+        attestation_id=pre.att_id,
+        chain_seq=getattr(request.state, "walacor_chain_seq", None),
+        policy_result=pre.pr,
+    )
     return http_response
