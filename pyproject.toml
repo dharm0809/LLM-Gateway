@@ -17,6 +17,8 @@ dependencies = [
   "pydantic-settings>=2.0",
   "prometheus-client>=0.20",
   "uvloop>=0.21.0; sys_platform != 'win32'",
+  "tenacity>=9.0",
+  "pybreaker>=1.2",
 ]
 
 [project.optional-dependencies]
