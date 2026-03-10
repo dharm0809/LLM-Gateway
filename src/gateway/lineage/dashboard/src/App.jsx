@@ -8,6 +8,7 @@ import Execution from './views/Execution';
 import Attempts from './views/Attempts';
 import Control from './views/Control';
 import Compliance from './views/Compliance';
+import Playground from './views/Playground';
 
 function StatusPulse({ status }) {
   const colors = { healthy: '#34d399', degraded: '#f59e0b', fail_closed: '#ef4444' };
@@ -65,7 +66,7 @@ export default function App() {
     setTimeout(() => document.documentElement.classList.remove('theme-transitioning'), 350);
   };
 
-  const tabs = ['overview', 'sessions', 'attempts', 'control', 'compliance'];
+  const tabs = ['overview', 'sessions', 'attempts', 'control', 'compliance', 'playground'];
   const activeTab = ['overview', 'sessions', 'timeline', 'execution'].includes(view.name)
     ? (view.name === 'timeline' || view.name === 'execution' ? 'sessions' : view.name)
     : view.name === 'attempts' ? 'attempts' : view.name;
@@ -81,6 +82,7 @@ export default function App() {
       case 'attempts': return <Attempts navigate={navigate} params={view.params} />;
       case 'control': return <Control navigate={navigate} params={view.params} health={health} />;
       case 'compliance': return <Compliance navigate={navigate} />;
+      case 'playground': return <Playground navigate={navigate} />;
       default: return <Overview navigate={navigate} health={health} />;
     }
   };
