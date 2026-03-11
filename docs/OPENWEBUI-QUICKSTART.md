@@ -100,3 +100,58 @@ Check that `ENABLE_FORWARD_USER_INFO_HEADERS=true` and `ENABLE_DIRECT_CONNECTION
 
 **Gateway returns 401**
 Ensure `OPENAI_API_KEY` in OpenWebUI matches `WALACOR_GATEWAY_API_KEYS` in Gateway. These must be identical.
+
+---
+
+## Governance Visibility (Optional)
+
+Install the Walacor Governance Pipeline to see audit metadata in chat:
+
+1. Copy `plugins/openwebui/governance_pipeline.py` to your Pipelines server
+2. Set `WALACOR_GATEWAY_URL` and `WALACOR_GATEWAY_API_KEY` environment variables
+3. Enable the pipeline in **Admin > Pipelines**
+
+Each response will show chain position, policy result, content analysis verdict, and budget status.
+
+---
+
+## Enterprise RBAC
+
+OpenWebUI forwards user roles to Gateway via `X-OpenWebUI-User-Role` header. Create policies in the Gateway control plane to restrict models by role:
+
+```bash
+# Allow only admins to use expensive models
+curl -X POST http://localhost:8002/v1/control/policies \
+  -H "X-API-Key: YOUR_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "name": "admin-only-expensive-models",
+    "rules": [
+      {"field": "model_id", "op": "in", "value": ["gpt-4o", "claude-sonnet-4-20250514"]},
+      {"field": "caller_role", "op": "equals", "value": "admin"}
+    ],
+    "action": "allow"
+  }'
+
+# Block pending users entirely
+curl -X POST http://localhost:8002/v1/control/policies \
+  -H "X-API-Key: YOUR_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "name": "block-pending-users",
+    "rules": [
+      {"field": "caller_role", "op": "equals", "value": "pending"}
+    ],
+    "action": "deny"
+  }'
+```
+
+---
+
+## Gateway Status API
+
+The Gateway exposes an OpenWebUI-optimized status endpoint:
+
+```bash
+curl http://localhost:8002/v1/openwebui/status -H "X-API-Key: YOUR_KEY"
+```
+
+Returns banners (operational alerts), budget info, and model health — consumed by the Governance Pipeline plugin for in-chat alerts.
