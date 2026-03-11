@@ -151,7 +151,8 @@ _CORS_HEADERS = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": (
         "Content-Type, Authorization, X-API-Key, "
-        "X-Session-ID, X-User-Id, X-User-Email, X-User-Roles, X-Team-Id"
+        "X-Session-ID, X-User-Id, X-User-Email, X-User-Roles, X-Team-Id, "
+        "X-OpenWebUI-User-Name, X-OpenWebUI-User-Id, X-OpenWebUI-User-Email, X-OpenWebUI-User-Role"
     ),
     "Access-Control-Expose-Headers": (
         "x-walacor-execution-id, x-walacor-attestation-id, "

@@ -117,7 +117,9 @@ Each response will show chain position, policy result, content analysis verdict,
 
 ## Enterprise RBAC
 
-OpenWebUI forwards user roles to Gateway via `X-OpenWebUI-User-Role` header. Create policies in the Gateway control plane to restrict models by role:
+OpenWebUI forwards user roles to Gateway via `X-OpenWebUI-User-Role` header. Create policies in the Gateway control plane to restrict models by role.
+
+> **Security note:** These headers are unverified (`source: "header_unverified"`). They are trustworthy only when the network path between OpenWebUI and Gateway is controlled (e.g. Docker internal network, Kubernetes pod-to-pod). For production deployments requiring verified identity, configure `WALACOR_AUTH_MODE=jwt` and set up OpenWebUI's OAuth/OIDC integration to pass JWTs.
 
 ```bash
 # Allow only admins to use expensive models

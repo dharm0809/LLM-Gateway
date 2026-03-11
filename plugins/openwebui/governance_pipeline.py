@@ -99,7 +99,10 @@ class Pipeline:
             icon = "🛡️" if content_analysis == "clean" else "⚠️"
             parts.append(f"{icon} {content_analysis.replace('_', ' ').title()}")
         if budget_percent:
-            remaining_str = f"{int(budget_remaining):,}" if budget_remaining else "?"
+            try:
+                remaining_str = f"{int(budget_remaining):,}" if budget_remaining else "?"
+            except (ValueError, TypeError):
+                remaining_str = "?"
             parts.append(f"💰 {remaining_str} tokens remaining ({budget_percent}% used)")
 
         footer_line1 = "  ".join(parts)
