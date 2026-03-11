@@ -69,3 +69,62 @@ class TestResolveIdentityFromHeaders:
         request = _make_request({"x-user-id": "  "})
         identity = resolve_identity_from_headers(request)
         assert identity is None
+
+    def test_openwebui_user_name_fallback(self):
+        request = _make_request({"x-openwebui-user-name": "alice"})
+        identity = resolve_identity_from_headers(request)
+        assert identity is not None
+        assert identity.user_id == "alice"
+
+    def test_openwebui_user_id_fallback(self):
+        request = _make_request({"x-openwebui-user-id": "uuid-123"})
+        identity = resolve_identity_from_headers(request)
+        assert identity is not None
+        assert identity.user_id == "uuid-123"
+
+    def test_generic_header_takes_precedence_over_openwebui(self):
+        request = _make_request({
+            "x-user-id": "generic-alice",
+            "x-openwebui-user-name": "owui-alice",
+        })
+        identity = resolve_identity_from_headers(request)
+        assert identity is not None
+        assert identity.user_id == "generic-alice"
+
+    def test_openwebui_email_fallback(self):
+        request = _make_request({
+            "x-openwebui-user-name": "alice",
+            "x-openwebui-user-email": "alice@example.com",
+        })
+        identity = resolve_identity_from_headers(request)
+        assert identity is not None
+        assert identity.email == "alice@example.com"
+
+    def test_generic_email_takes_precedence(self):
+        request = _make_request({
+            "x-user-id": "alice",
+            "x-user-email": "generic@co.com",
+            "x-openwebui-user-email": "owui@co.com",
+        })
+        identity = resolve_identity_from_headers(request)
+        assert identity is not None
+        assert identity.email == "generic@co.com"
+
+    def test_openwebui_role_as_roles_list(self):
+        request = _make_request({
+            "x-openwebui-user-name": "bob",
+            "x-openwebui-user-role": "admin",
+        })
+        identity = resolve_identity_from_headers(request)
+        assert identity is not None
+        assert identity.roles == ["admin"]
+
+    def test_generic_roles_takes_precedence(self):
+        request = _make_request({
+            "x-user-id": "alice",
+            "x-user-roles": "editor, viewer",
+            "x-openwebui-user-role": "admin",
+        })
+        identity = resolve_identity_from_headers(request)
+        assert identity is not None
+        assert identity.roles == ["editor", "viewer"]
