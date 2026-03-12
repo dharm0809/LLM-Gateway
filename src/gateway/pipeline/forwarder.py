@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json as _json_mod
 import logging
 import time
 import httpx
@@ -17,6 +18,24 @@ from gateway.pipeline.context import get_pipeline_context
 from gateway.metrics.prometheus import forward_duration
 
 logger = logging.getLogger(__name__)
+
+
+def _inject_stream_options(content: bytes | None) -> bytes | None:
+    """Inject stream_options.include_usage=true into streaming request bodies.
+
+    OpenAI-compatible APIs (including Ollama) only return token usage in
+    the final SSE chunk when this option is set.
+    """
+    if not content:
+        return content
+    try:
+        body = _json_mod.loads(content)
+        if isinstance(body, dict) and body.get("stream") and "stream_options" not in body:
+            body["stream_options"] = {"include_usage": True}
+            return _json_mod.dumps(body).encode()
+    except (ValueError, TypeError):
+        pass
+    return content
 
 
 def build_governance_sse_event(
@@ -125,11 +144,18 @@ async def stream_with_tee(
     client = _http_client()
     shared = client is get_pipeline_context().http_client
 
+    # Inject stream_options so provider returns token usage in final SSE chunk.
+    content = _inject_stream_options(upstream_req.content)
+    headers = dict(upstream_req.headers)
+    if content is not upstream_req.content:
+        # Body changed — drop Content-Length so httpx recomputes it.
+        headers.pop("content-length", None)
+
     stream_kwargs = dict(
         method=upstream_req.method,
         url=str(upstream_req.url),
-        headers=upstream_req.headers,
-        content=upstream_req.content,
+        headers=headers,
+        content=content,
     )
 
     if shared:

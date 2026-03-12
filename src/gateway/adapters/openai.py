@@ -256,6 +256,11 @@ def _process_sse_line(
     if finish_reason == "tool_calls":
         state["has_pending_tool_calls"] = True
 
+    # Capture usage from the final SSE chunk (Ollama & OpenAI send it here).
+    usage = obj.get("usage")
+    if usage:
+        state["usage"] = usage
+
 
 class OpenAIAdapter(ProviderAdapter):
     """Adapter for OpenAI-compatible API (chat/completions and completions)."""
@@ -363,7 +368,7 @@ class OpenAIAdapter(ProviderAdapter):
         tool_interactions = _build_interactions_from_map(tool_call_map)
         return ModelResponse(
             content="".join(content_parts),
-            usage=None,
+            usage=state.get("usage"),
             raw_body=b"".join(chunks),
             provider_request_id=state["provider_request_id"],
             tool_interactions=tool_interactions if tool_interactions else None,

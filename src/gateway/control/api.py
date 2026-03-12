@@ -43,6 +43,12 @@ def _refresh_attestation_cache() -> None:
     for p in proofs:
         ctx.attestation_cache.set_from_proof(p.get("provider", "ollama"), p)
     logger.info("Attestation cache refreshed: %d entries", len(proofs))
+    # Invalidate /v1/models cache so OpenWebUI picks up changes immediately
+    try:
+        from gateway.models_api import _invalidate_models_cache
+        _invalidate_models_cache()
+    except Exception:
+        pass
 
 
 def _refresh_policy_cache() -> None:

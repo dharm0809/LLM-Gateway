@@ -465,6 +465,40 @@ def _init_control_plane(settings, ctx) -> None:
     logger.info("Embedded control plane ready: %s", db_path)
 
 
+async def _auto_register_models(settings, ctx) -> None:
+    """Auto-discover provider models and register any new ones in the control store."""
+    if ctx.control_store is None or ctx.http_client is None:
+        return
+    try:
+        from gateway.control.discovery import discover_provider_models
+
+        discovered = await discover_provider_models(settings, ctx.http_client)
+        if not discovered:
+            return
+        existing = ctx.control_store.list_attestations(settings.gateway_tenant_id)
+        existing_keys = {(a["provider"], a["model_id"]) for a in existing}
+        registered = 0
+        for m in discovered:
+            key = (m["provider"], m["model_id"])
+            if key not in existing_keys:
+                ctx.control_store.upsert_attestation({
+                    "model_id": m["model_id"],
+                    "provider": m["provider"],
+                    "status": "active",
+                    "verification_level": "auto_attested",
+                    "tenant_id": settings.gateway_tenant_id,
+                    "notes": "Auto-registered on startup",
+                })
+                registered += 1
+        if registered:
+            # Refresh attestation cache with newly registered models
+            from gateway.control.loader import load_into_caches
+            load_into_caches(ctx.control_store, ctx, settings)
+            logger.info("Auto-registered %d model(s) from providers", registered)
+    except Exception:
+        logger.warning("Auto-register models failed (non-fatal)", exc_info=True)
+
+
 def _init_alert_bus(settings, ctx) -> None:
     """Phase 26: Alert event bus with webhook/Slack/PagerDuty dispatchers."""
     from gateway.alerts.bus import AlertBus
@@ -617,6 +651,7 @@ async def on_startup() -> None:
             _init_otel(settings, ctx)
         if settings.control_plane_enabled:
             _init_control_plane(settings, ctx)
+            await _auto_register_models(settings, ctx)
         _init_load_balancer(settings, ctx)
         # Warn if control plane is active but no API keys are configured
         if settings.control_plane_enabled and not settings.api_keys_list:

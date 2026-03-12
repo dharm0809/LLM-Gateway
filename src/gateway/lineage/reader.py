@@ -10,9 +10,9 @@ from typing import Any
 
 from walacor_core import compute_sha3_512_string
 
-logger = logging.getLogger(__name__)
+from gateway.pipeline.session_chain import GENESIS_HASH
 
-_GENESIS_HASH = "0" * 128
+logger = logging.getLogger(__name__)
 
 
 class LineageReader:
@@ -49,6 +49,7 @@ class LineageReader:
             SELECT
                 s.session_id,
                 s.record_count,
+                s.user_message_count,
                 s.last_activity,
                 s.model,
                 s.user,
@@ -58,6 +59,9 @@ class LineageReader:
                 SELECT
                     json_extract(record_json, '$.session_id') AS session_id,
                     COUNT(*) AS record_count,
+                    SUM(CASE WHEN COALESCE(
+                        json_extract(record_json, '$.metadata.request_type'), 'user_message'
+                    ) = 'user_message' THEN 1 ELSE 0 END) AS user_message_count,
                     MAX(json_extract(record_json, '$.timestamp')) AS last_activity,
                     COALESCE(json_extract(record_json, '$.model_id'),
                              json_extract(record_json, '$.model_attestation_id')) AS model,
@@ -361,7 +365,7 @@ class LineageReader:
             return {"valid": True, "record_count": 0, "errors": [], "session_id": session_id}
 
         errors: list[str] = []
-        prev_hash = _GENESIS_HASH
+        prev_hash = GENESIS_HASH
 
         for i, rec in enumerate(records):
             seq = rec.get("sequence_number")

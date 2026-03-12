@@ -893,10 +893,24 @@ async def _attestation_check(
 
     attestation, err = await resolve_attestation(ctx.attestation_cache, adapter.get_provider_name(), call.model_id, try_refresh=try_refresh)
     if err is not None:
-        # Auto-attest when no control plane is configured (standalone governance mode).
-        # Skip auto-attestation when embedded control plane is active (control_store exists)
-        # — it manages attestations explicitly via CRUD API.
-        if ctx.sync_client is None and ctx.control_store is None:
+        # Auto-attest when no remote sync client is configured.
+        # With embedded control plane: auto-attest only if the model was NEVER explicitly revoked.
+        # Without control plane: always auto-attest (standalone governance mode).
+        _can_auto_attest = False
+        if ctx.sync_client is None:
+            if ctx.control_store is None:
+                _can_auto_attest = True
+            else:
+                # Check if model was explicitly revoked in the control store.
+                # If it was never registered or is active, allow auto-attestation.
+                existing = [
+                    a for a in ctx.control_store.list_attestations(settings.gateway_tenant_id)
+                    if a.get("model_id") == call.model_id and a.get("provider") == adapter.get_provider_name()
+                ]
+                if not existing or existing[0].get("status") != "revoked":
+                    _can_auto_attest = True
+
+        if _can_auto_attest:
             from datetime import datetime, timezone
             from gateway.cache.attestation_cache import CachedAttestation
 
@@ -911,21 +925,29 @@ async def _attestation_check(
                 verification_level="self_attested",
             )
             ctx.attestation_cache.set(auto_att)
+            # Also persist to control store so it shows up in the dashboard
+            if ctx.control_store is not None:
+                ctx.control_store.upsert_attestation({
+                    "attestation_id": auto_att.attestation_id,
+                    "model_id": call.model_id,
+                    "provider": adapter.get_provider_name(),
+                    "status": "active",
+                    "verification_level": "auto_attested",
+                    "tenant_id": settings.gateway_tenant_id,
+                    "notes": "Auto-attested on first use",
+                })
+                logger.info("Auto-attested model: provider=%s model=%s (registered in control plane)", adapter.get_provider_name(), call.model_id)
+            else:
+                logger.info("Auto-attested model: provider=%s model=%s (no control plane)", adapter.get_provider_name(), call.model_id)
             att_id = auto_att.attestation_id
             att_ctx = {"model_id": call.model_id, "provider": adapter.get_provider_name(), "status": "active", "verification_level": "self_attested", "tenant_id": settings.gateway_tenant_id}
-            logger.info("Auto-attested model: provider=%s model=%s (no control plane)", adapter.get_provider_name(), call.model_id)
             _inject_caller_role(att_ctx, request)
             return att_id, att_ctx, False, None, None
         if is_audit_only:
             logger.warning("AUDIT_ONLY: Would have blocked (attestation) provider=%s model=%s", provider, model)
             _inject_caller_role(att_ctx, request)
             return att_id, att_ctx, True, "attestation", None
-        # When embedded control plane is active, override the error with a clearer message
-        if ctx.control_store is not None and err.status_code == 503:
-            err = JSONResponse(
-                {"error": f"Model '{call.model_id}' is not registered in the control plane. Register it via the Control > Models tab before use."},
-                status_code=403,
-            )
+        # Model was explicitly revoked — block with clear message
         _set_disposition(request, "denied_attestation")
         _inc_request(provider, model, "blocked_stale" if err.status_code == 503 else "blocked_attestation")
         _inject_caller_role(att_ctx, request)
@@ -1392,6 +1414,18 @@ async def handle_request(request: Request) -> Response:
     extra: dict[str, Any] = {"prompt_id": prompt_id}
     if client_context:
         extra["client_context"] = client_context
+    # Classify request type: prefer metadata from OpenWebUI filter plugin,
+    # fall back to prompt prefix detection for unmodified OpenWebUI installs.
+    _meta_rt = call.metadata.get("request_type")
+    if _meta_rt:
+        extra["request_type"] = _meta_rt
+    else:
+        _prompt = call.prompt_text or ""
+        extra["request_type"] = "system_task" if _prompt.lstrip().startswith("### Task:") else "user_message"
+    # Propagate OpenWebUI message ID for per-message audit correlation
+    msg_id = request.headers.get("x-openwebui-message-id")
+    if msg_id:
+        extra["message_id"] = msg_id
     # Merge caller identity from middleware (JWT or header-based)
     caller_identity = getattr(request.state, "caller_identity", None)
     if caller_identity is not None:

@@ -77,6 +77,7 @@ class HuggingFaceAdapter(ProviderAdapter):
     def parse_streamed_response(self, chunks: list[bytes]) -> ModelResponse:
         content_parts = []
         provider_request_id = None
+        usage = None
         for chunk in chunks:
             for line in chunk.decode("utf-8", errors="replace").splitlines():
                 if line.startswith("data: "):
@@ -90,11 +91,13 @@ class HuggingFaceAdapter(ProviderAdapter):
                                 content_parts.append(delta)
                         elif "token" in obj and "text" in obj["token"]:
                             content_parts.append(obj["token"]["text"])
+                        if obj.get("usage"):
+                            usage = obj["usage"]
                     except json.JSONDecodeError:
                         pass
         return ModelResponse(
             content="".join(content_parts),
-            usage=None,
+            usage=usage,
             raw_body=b"".join(chunks),
             provider_request_id=provider_request_id,
         )
