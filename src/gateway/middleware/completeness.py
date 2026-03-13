@@ -34,7 +34,7 @@ async def completeness_middleware(request: Request, call_next) -> Response:
     finally:
         settings = get_settings()
         ctx = get_pipeline_context()
-        if settings.completeness_enabled and (ctx.wal_writer or ctx.walacor_client):
+        if settings.completeness_enabled and ctx.storage:
             # Prefer request.state values: BaseHTTPMiddleware runs call_next in a separate
             # anyio task, so ContextVar mutations in the handler are not visible here.
             disposition = getattr(request.state, "walacor_disposition", disposition_var.get())
@@ -45,30 +45,17 @@ async def completeness_middleware(request: Request, call_next) -> Response:
             execution_id = getattr(request.state, "walacor_execution_id", execution_id_var.get())
             user_id = getattr(request.state, "walacor_user_id", None)
             try:
-                if ctx.walacor_client:
-                    await ctx.walacor_client.write_attempt(
-                        request_id=rid,
-                        tenant_id=tenant_id,
-                        path=request.url.path,
-                        disposition=disposition,
-                        status_code=status_code,
-                        provider=provider,
-                        model_id=model_id,
-                        execution_id=execution_id,
-                        user=user_id,
-                    )
-                if ctx.wal_writer:
-                    ctx.wal_writer.write_attempt(
-                        request_id=rid,
-                        tenant_id=tenant_id,
-                        path=request.url.path,
-                        disposition=disposition,
-                        status_code=status_code,
-                        provider=provider,
-                        model_id=model_id,
-                        execution_id=execution_id,
-                        user=user_id,
-                    )
+                await ctx.storage.write_attempt({
+                    "request_id": rid,
+                    "tenant_id": tenant_id,
+                    "path": request.url.path,
+                    "disposition": disposition,
+                    "status_code": status_code,
+                    "provider": provider,
+                    "model_id": model_id,
+                    "execution_id": execution_id,
+                    "user": user_id,
+                })
                 gateway_attempts_total.labels(disposition=disposition).inc()
             except Exception as e:
                 logger.warning("Failed to write gateway_attempt: %s", e)
