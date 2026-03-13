@@ -61,13 +61,13 @@ logger = logging.getLogger(__name__)
 
 def _resolve_header_identity_fallback(request: Request) -> None:
     """Set caller_identity from headers if not already set by JWT."""
-    if hasattr(request.state, "caller_identity"):
-        return
     try:
         from gateway.auth.identity import resolve_identity_from_headers
         identity = resolve_identity_from_headers(request)
         if identity is not None:
-            request.state.caller_identity = identity
+            request.state.header_identity = identity
+            if not hasattr(request.state, "caller_identity"):
+                request.state.caller_identity = identity
     except Exception:
         logger.debug("resolve_identity_from_headers failed", exc_info=True)
 
@@ -99,10 +99,25 @@ def _try_jwt_auth(request: Request, settings) -> bool:
         )
         if identity is not None:
             request.state.caller_identity = identity
+            request.state.jwt_identity = identity
             return True
     except Exception as e:
         logger.debug("JWT auth attempt failed: %s", e)
     return False
+
+
+def _cross_validate_identity(request: Request, settings) -> None:
+    """Phase 23: Cross-validate JWT claims against header-claimed identity."""
+    ctx = get_pipeline_context()
+    if not settings.identity_validation_enabled or not ctx.identity_validator:
+        return
+    jwt_id = getattr(request.state, "jwt_identity", None)
+    header_id = getattr(request.state, "header_identity", None)
+    val_result = ctx.identity_validator.validate(jwt_id, header_id, request)
+    if val_result.identity:
+        request.state.caller_identity = val_result.identity
+    if val_result.warnings:
+        request.state.identity_warnings = val_result.warnings
 
 
 async def api_key_middleware(request: Request, call_next):
@@ -119,6 +134,7 @@ async def api_key_middleware(request: Request, call_next):
         # JWT-only: require valid JWT
         if _try_jwt_auth(request, settings):
             _resolve_header_identity_fallback(request)
+            _cross_validate_identity(request, settings)
             return await call_next(request)
         request.state.walacor_disposition = "denied_auth"
         return JSONResponse({"error": "Missing or invalid JWT"}, status_code=401)
@@ -127,6 +143,7 @@ async def api_key_middleware(request: Request, call_next):
         # Try JWT first, fall back to API key
         if _try_jwt_auth(request, settings):
             _resolve_header_identity_fallback(request)
+            _cross_validate_identity(request, settings)
             return await call_next(request)
         # Fall through to API key check
         err = require_api_key_if_configured(request, settings.api_keys_list)
@@ -134,6 +151,7 @@ async def api_key_middleware(request: Request, call_next):
             request.state.walacor_disposition = "denied_auth"
             return err
         _resolve_header_identity_fallback(request)
+        _cross_validate_identity(request, settings)
         return await call_next(request)
 
     # Default: api_key mode (unchanged behavior)
@@ -142,6 +160,7 @@ async def api_key_middleware(request: Request, call_next):
         request.state.walacor_disposition = "denied_auth"
         return err
     _resolve_header_identity_fallback(request)
+    _cross_validate_identity(request, settings)
     return await call_next(request)
 
 
@@ -668,6 +687,30 @@ async def on_startup() -> None:
             if disk_probe and disk_probe.detail.get("auto_max_gb") is not None:
                 ctx.effective_wal_max_gb = disk_probe.detail["auto_max_gb"]
                 logger.info("WAL max size auto-scaled to %.2f GB", ctx.effective_wal_max_gb)
+        # Phase 23: Request classifier + identity validator
+        from gateway.adaptive.request_classifier import DefaultRequestClassifier
+        from gateway.adaptive.identity_validator import DefaultIdentityValidator
+        ctx.request_classifier = DefaultRequestClassifier()
+        ctx.identity_validator = DefaultIdentityValidator()
+        # Load custom implementations if configured
+        if settings.custom_request_classifiers:
+            from gateway.adaptive import load_custom_class, parse_custom_paths
+            paths = parse_custom_paths(settings.custom_request_classifiers)
+            if paths:
+                try:
+                    cls = load_custom_class(paths[0])
+                    ctx.request_classifier = cls()
+                except Exception as e:
+                    logger.warning("Failed to load custom classifier %s: %s", paths[0], e)
+        if settings.custom_identity_validators:
+            from gateway.adaptive import load_custom_class, parse_custom_paths
+            paths = parse_custom_paths(settings.custom_identity_validators)
+            if paths:
+                try:
+                    cls = load_custom_class(paths[0])
+                    ctx.identity_validator = cls()
+                except Exception as e:
+                    logger.warning("Failed to load custom validator %s: %s", paths[0], e)
         await _self_test()
         # Start alert bus background consumer
         if ctx.alert_bus and ctx.alert_bus._dispatchers:

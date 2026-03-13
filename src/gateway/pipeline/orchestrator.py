@@ -1449,10 +1449,19 @@ async def handle_request(request: Request) -> Response:
     if client_context:
         extra["client_context"] = client_context
     # Classify request type: prefer metadata from OpenWebUI filter plugin,
-    # fall back to prompt content detection for unmodified OpenWebUI installs.
+    # fall back to multi-source adaptive classifier.
     _meta_rt = call.metadata.get("request_type")
+    _rc = get_pipeline_context().request_classifier
     if _meta_rt:
         extra["request_type"] = _meta_rt
+    elif _rc:
+        body_dict = {}
+        try:
+            body_dict = json.loads(call.raw_body) if call.raw_body else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        extra["request_type"] = _rc.classify(
+            call.prompt_text or "", dict(request.headers), body_dict)
     else:
         extra["request_type"] = _classify_request_type(call.prompt_text or "")
     # Propagate OpenWebUI message ID for per-message audit correlation
