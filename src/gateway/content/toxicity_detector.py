@@ -35,7 +35,11 @@ class ToxicityDetector(ContentAnalyzer):
     No content stored or logged.
     """
 
-    analyzer_id = "walacor.toxicity.v1"
+    _analyzer_id = "walacor.toxicity.v1"
+
+    @property
+    def analyzer_id(self) -> str:
+        return self._analyzer_id
 
     def __init__(self, extra_terms: list[str] | None = None) -> None:
         self._categories: list[tuple[str, re.Pattern[str]]] = [

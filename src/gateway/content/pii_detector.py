@@ -48,7 +48,11 @@ class PIIDetector(ContentAnalyzer):
     No content stored or logged.
     """
 
-    analyzer_id = "walacor.pii.v1"
+    _analyzer_id = "walacor.pii.v1"
+
+    @property
+    def analyzer_id(self) -> str:
+        return self._analyzer_id
 
     def __init__(self) -> None:
         self._block_types: set[str] = set(_BLOCK_PII_TYPES)
