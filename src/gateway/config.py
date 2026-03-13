@@ -183,17 +183,17 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("WALACOR_PASSWORD", "walacor_password"),
     )
     walacor_executions_etid: int = Field(
-        default=9000001,
+        default=9000011,
         description="Walacor ETId for gateway execution records table",
         validation_alias=AliasChoices("WALACOR_EXECUTIONS_ETID", "walacor_executions_etid"),
     )
     walacor_attempts_etid: int = Field(
-        default=9000002,
+        default=9000012,
         description="Walacor ETId for gateway attempts table",
         validation_alias=AliasChoices("WALACOR_ATTEMPTS_ETID", "walacor_attempts_etid"),
     )
     walacor_tool_events_etid: int = Field(
-        default=9000003,
+        default=9000013,
         description="Walacor ETId for gateway tool event records table",
         validation_alias=AliasChoices("WALACOR_TOOL_EVENTS_ETID", "walacor_tool_events_etid"),
     )

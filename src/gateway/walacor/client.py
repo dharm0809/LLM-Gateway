@@ -156,7 +156,12 @@ class WalacorClient:
     # ── Core submit ──────────────────────────────────────────────────────────
 
     async def _submit(self, etid: int, records: list[dict[str, Any]]) -> None:
-        """POST records to /envelopes/submit; re-authenticates once on 401."""
+        """POST records to /envelopes/submit; re-authenticates once on 401.
+
+        Walacor returns HTTP 200 even on validation errors (unknown fields, type
+        mismatches) with ``{"success": false, "error": ...}``.  We check the body
+        and raise so callers see the failure.
+        """
         assert self._http is not None
         for attempt in range(2):
             resp = await self._http.post(
@@ -169,16 +174,42 @@ class WalacorClient:
                 await self._authenticate()
                 continue
             resp.raise_for_status()
+            # Walacor may return 200 with success=false for schema validation errors
+            try:
+                body = resp.json()
+                if isinstance(body, dict) and body.get("success") is False:
+                    err_detail = body.get("error", {})
+                    raise RuntimeError(
+                        f"Walacor submit rejected ETId={etid}: {err_detail}"
+                    )
+            except (ValueError, KeyError):
+                pass  # Non-JSON or unexpected shape — treat as success
             return
 
     # ── Public write methods ─────────────────────────────────────────────────
+
+    # Fields defined in the Walacor gateway_executions schema (ETId 9000011).
+    # Records with unknown fields are silently rejected (HTTP 200 + success:false).
+    # Session chain fields (record_hash, previous_record_hash, sequence_number) and
+    # response policy fields are in the local WAL but NOT yet in the Walacor schema.
+    # They can be added via schema versioning when the Walacor admin UI supports it.
+    _EXECUTION_SCHEMA_FIELDS = frozenset({
+        "execution_id", "model_attestation_id", "model_id", "provider",
+        "policy_version", "policy_result", "tenant_id", "gateway_id",
+        "timestamp", "user", "session_id", "metadata_json", "prompt_text",
+        "response_content", "provider_request_id", "model_hash",
+        "thinking_content", "latency_ms", "prompt_tokens", "completion_tokens",
+        "total_tokens", "cache_hit", "cached_tokens", "cache_creation_tokens",
+        "retry_of", "variant_id",
+    })
 
     async def write_execution(self, record: ExecutionRecord | dict[str, Any]) -> None:
         """Persist one execution record to Walacor (ETId=walacor_executions_etid).
 
         Accepts ExecutionRecord or a dict (gateway builds dicts without prompt_hash/response_hash;
         backend hashes from prompt_text/response_content). The ``metadata`` dict is serialised
-        to ``metadata_json``. None-valued fields are omitted.
+        to ``metadata_json``. None-valued fields are omitted.  Fields not in the Walacor
+        schema are stripped to avoid silent rejection.
         """
         if isinstance(record, dict):
             data = dict(record)
@@ -187,7 +218,9 @@ class WalacorClient:
         meta = data.pop("metadata", None)
         if meta:
             data["metadata_json"] = json.dumps(meta)
-        data = {k: v for k, v in data.items() if v is not None}
+        # Strip fields not in the Walacor schema (timings, cache_hit, etc.)
+        data = {k: v for k, v in data.items()
+                if v is not None and k in self._EXECUTION_SCHEMA_FIELDS}
         eid = data.get("execution_id", "?")
         try:
             await self._submit(self._executions_etid, [data])
@@ -245,13 +278,31 @@ class WalacorClient:
             )
             # Swallow — attempt records are best-effort
 
+    # Fields defined in the Walacor gateway_tool_events schema (ETId 9000013).
+    _TOOL_EVENT_SCHEMA_FIELDS = frozenset({
+        "event_id", "execution_id", "session_id", "tenant_id", "gateway_id",
+        "timestamp", "tool_name", "tool_type", "tool_source", "input_data",
+        "input_hash", "output_data", "output_hash", "duration_ms", "iteration",
+        "is_error", "content_analysis", "metadata_json",
+    })
+
     async def write_tool_event(self, record: dict[str, Any]) -> None:
         """Persist one tool event record to Walacor (ETId=walacor_tool_events_etid).
 
         Best-effort — failures are logged as warnings and swallowed so tool event
         auditing never blocks the response path.
         """
-        data = {k: v for k, v in record.items() if v is not None}
+        data = dict(record)
+        # Field mapping: gateway uses "source", schema uses "tool_source"
+        if "source" in data:
+            data["tool_source"] = data.pop("source")
+        # Serialise dict/list fields to JSON strings
+        for key in ("input_data", "sources", "content_analysis"):
+            if key in data and isinstance(data[key], (dict, list)):
+                data[key] = json.dumps(data[key], default=str)
+        # Drop prompt_id and other fields not in schema
+        data = {k: v for k, v in data.items()
+                if v is not None and k in self._TOOL_EVENT_SCHEMA_FIELDS}
         try:
             await self._submit(self._tool_events_etid, [data])
             logger.debug("Walacor write_tool_event event_id=%s", data.get("event_id", "?"))
