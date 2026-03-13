@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 from gateway.storage.backend import StorageBackend
 from gateway.storage.router import StorageRouter, WriteResult
 from gateway.storage.wal_backend import WALBackend
+from gateway.storage.walacor_backend import WalacorBackend
 
 
 @pytest.fixture(params=["asyncio"])
@@ -189,3 +190,63 @@ async def test_wal_backend_close():
     backend = WALBackend(writer)
     await backend.close()
     writer.close.assert_called_once()
+
+
+# ── WalacorBackend tests ───────────────────────────────────────────────────
+
+def _make_walacor_client() -> MagicMock:
+    client = MagicMock()
+    client.write_execution = AsyncMock()
+    client.write_attempt = AsyncMock()
+    client.write_tool_event = AsyncMock()
+    client.close = AsyncMock()
+    return client
+
+
+@pytest.mark.anyio
+async def test_walacor_backend_write_execution_success():
+    client = _make_walacor_client()
+    backend = WalacorBackend(client)
+    assert backend.name == "walacor"
+    ok = await backend.write_execution({"execution_id": "e1"})
+    assert ok is True
+    client.write_execution.assert_called_once_with({"execution_id": "e1"})
+
+
+@pytest.mark.anyio
+async def test_walacor_backend_write_execution_failure():
+    client = _make_walacor_client()
+    client.write_execution.side_effect = RuntimeError("Walacor 500")
+    backend = WalacorBackend(client)
+    ok = await backend.write_execution({"execution_id": "e2"})
+    assert ok is False
+
+
+@pytest.mark.anyio
+async def test_walacor_backend_write_attempt():
+    client = _make_walacor_client()
+    backend = WalacorBackend(client)
+    await backend.write_attempt({
+        "request_id": "r1", "tenant_id": "t1", "path": "/v1/chat/completions",
+        "disposition": "allowed", "status_code": 200,
+    })
+    client.write_attempt.assert_called_once_with(
+        request_id="r1", tenant_id="t1", path="/v1/chat/completions",
+        disposition="allowed", status_code=200,
+    )
+
+
+@pytest.mark.anyio
+async def test_walacor_backend_write_tool_event():
+    client = _make_walacor_client()
+    backend = WalacorBackend(client)
+    await backend.write_tool_event({"event_id": "t1"})
+    client.write_tool_event.assert_called_once_with({"event_id": "t1"})
+
+
+@pytest.mark.anyio
+async def test_walacor_backend_close():
+    client = _make_walacor_client()
+    backend = WalacorBackend(client)
+    await backend.close()
+    client.close.assert_called_once()
