@@ -313,6 +313,19 @@ async def _init_walacor(settings, ctx) -> None:
     )
 
 
+def _init_storage(settings, ctx) -> None:
+    """Build StorageRouter from available backends."""
+    from gateway.storage import StorageRouter, WALBackend, WalacorBackend
+
+    backends = []
+    if ctx.wal_writer:
+        backends.append(WALBackend(ctx.wal_writer))
+    if ctx.walacor_client:
+        backends.append(WalacorBackend(ctx.walacor_client))
+    ctx.storage = StorageRouter(backends)
+    logger.info("Storage router ready: backends=%s", [b.name for b in backends])
+
+
 def _init_content_analyzers(settings, ctx) -> None:
     """Phase 10: PII and toxicity content analyzers."""
     from gateway.content.pii_detector import PIIDetector
@@ -667,6 +680,7 @@ async def on_startup() -> None:
 
         if settings.skip_governance:
             ctx.skip_governance = True
+            _init_storage(settings, ctx)
             _init_lineage(settings, ctx)
             logger.info("Gateway running in skip_governance (transparent proxy) mode")
             return
@@ -674,6 +688,7 @@ async def on_startup() -> None:
         await _init_governance(settings, ctx)
         if not settings.walacor_storage_enabled and not ctx.wal_writer:
             _init_wal(settings, ctx)
+        _init_storage(settings, ctx)
         _init_lineage(settings, ctx)
         ctx.redis_client = await _init_redis(settings)
         _init_content_analyzers(settings, ctx)

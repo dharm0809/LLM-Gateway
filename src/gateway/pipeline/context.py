@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from gateway.mcp.registry import ToolRegistry
     from gateway.pipeline.budget_tracker import BudgetTracker
     from gateway.pipeline.session_chain import SessionChainTracker
+    from gateway.storage.router import StorageRouter
     from gateway.sync.sync_client import SyncClient
     from gateway.wal.delivery_worker import DeliveryWorker
     from gateway.wal.writer import WALWriter
@@ -39,6 +40,8 @@ class PipelineContext:
         self.session_chain: SessionChainTracker | None = None
         # Walacor backend storage (replaces SQLite WAL when configured)
         self.walacor_client: WalacorClient | None = None
+        # Storage abstraction layer (fans out to WAL + Walacor)
+        self.storage: StorageRouter | None = None
         # Phase 14: tool-aware gateway (active strategy)
         self.tool_registry: ToolRegistry | None = None
         # Phase 15: Redis client for shared state (multi-replica)
