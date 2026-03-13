@@ -90,7 +90,6 @@ class WALWriter:
             (execution_id, record_json, now),
         )
         conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(FULL)")
         logger.debug("WAL write execution_id=%s", execution_id)
 
     def get_undelivered(self, limit: int = 50) -> list[tuple[str, str, str]]:
@@ -173,7 +172,6 @@ class WALWriter:
             (event_id, json.dumps(record), datetime.now(timezone.utc).isoformat()),
         )
         conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(FULL)")
         logger.debug("WAL write_tool_event event_id=%s", event_id)
 
     def purge_delivered(self, max_age_hours: float) -> int:
