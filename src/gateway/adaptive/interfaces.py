@@ -1,4 +1,9 @@
-"""Abstract interfaces and data classes for the adaptive gateway layer."""
+"""Abstract interfaces and data classes for the adaptive gateway layer.
+
+Every decision point in the gateway has a documented interface that
+enterprises can override without forking. Implement any ABC below
+and register via WALACOR_CUSTOM_* config fields.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ class ProbeResult:
     """Result of a startup or capability probe.
 
     Attributes:
-        name: Human-readable probe identifier (e.g. ``"ollama"``, ``"disk"``).
+        name: Human-readable probe identifier (e.g. ``"provider_health"``).
         healthy: ``True`` if the probed component is operational.
         detail: Arbitrary diagnostic payload (latency, version, etc.).
     """
@@ -29,17 +34,17 @@ class ProbeResult:
 
 @dataclass(frozen=True)
 class ValidationResult:
-    """Result of an identity validation check.
+    """Result of identity cross-validation.
 
     Attributes:
-        valid: ``True`` if the caller identity was verified.
-        identity: Resolved user/service identifier (may be ``""`` on failure).
-        source: Mechanism that produced the identity (``"jwt"``, ``"api_key"``, etc.).
-        warnings: Non-fatal messages (e.g. ``"clock skew detected"``).
+        valid: ``True`` if identities are consistent (no mismatch).
+        identity: Resolved CallerIdentity or None.
+        source: Mechanism that produced the identity (``"jwt_verified"``, etc.).
+        warnings: Non-fatal messages (e.g. identity mismatch details).
     """
 
     valid: bool
-    identity: str = ""
+    identity: Any = None  # CallerIdentity or None
     source: str = ""
     warnings: list[str] = field(default_factory=list)
 
@@ -68,63 +73,68 @@ class ResourceStatus:
 
 
 class StartupProbe(ABC):
-    """Probe executed once during gateway startup to verify readiness.
+    """Runs at gateway startup to validate environment readiness.
 
-    Contract: ``check()`` must return a :class:`ProbeResult` within a
-    reasonable timeout.  A probe that raises is treated as unhealthy.
+    Contract:
+    - Must complete within 10 seconds
+    - Must never raise — return ProbeResult(healthy=False) on failure
+    - Results exposed in /health endpoint
     """
 
     @abstractmethod
-    async def check(self) -> ProbeResult:
-        """Run the probe and return a result."""
+    async def check(self, http_client: Any, settings: Any) -> ProbeResult: ...
 
 
 class RequestClassifier(ABC):
-    """Classifies an inbound request for routing/policy decisions.
+    """Classifies incoming requests by type.
 
-    Contract: ``classify()`` receives the raw ASGI request and returns a
-    string label (e.g. ``"chat"``, ``"completion"``, ``"embedding"``).
-    Implementations must be fast (< 1 ms) and side-effect-free.
+    Contract:
+    - Must be synchronous (called in hot path)
+    - Return value stored in metadata.request_type
+    - "user_message" is the default; any other value is a system/synthetic task
     """
 
     @abstractmethod
-    async def classify(self, request: Any) -> str:
-        """Return a classification label for the request."""
+    def classify(self, prompt: str, headers: dict[str, str],
+                 body: dict[str, Any]) -> str: ...
 
 
 class CapabilityProbe(ABC):
-    """Discovers runtime capabilities of a model or provider.
+    """Discovers model capabilities at runtime.
 
-    Contract: ``probe()`` accepts a model identifier and returns a
-    :class:`ProbeResult` describing what the model supports (e.g.
-    function-calling, vision, streaming).
+    Contract:
+    - Async, may make HTTP calls to providers
+    - Return dict of capability_key -> value
+    - Must handle timeouts gracefully (return empty dict)
     """
 
     @abstractmethod
-    async def probe(self, model_id: str) -> ProbeResult:
-        """Probe a model's capabilities and return a result."""
+    async def probe(self, model_id: str, provider: str,
+                    http_client: Any) -> dict[str, Any]: ...
 
 
 class IdentityValidator(ABC):
-    """Validates caller identity beyond simple API-key lookup.
+    """Validates caller identity consistency across auth sources.
 
-    Contract: ``validate()`` receives the raw request and returns a
-    :class:`ValidationResult`.  Must never raise — return
-    ``ValidationResult(valid=False, ...)`` on failure.
+    Contract:
+    - Synchronous (called in middleware hot path)
+    - JWT identity takes priority over header identity on conflict
+    - Mismatches are warnings, not errors (fail-open)
     """
 
     @abstractmethod
-    async def validate(self, request: Any) -> ValidationResult:
-        """Validate the caller's identity and return a result."""
+    def validate(self, jwt_identity: Any, header_identity: Any,
+                 request: Any) -> ValidationResult: ...
 
 
 class ResourceMonitor(ABC):
-    """Periodically checks runtime resource health.
+    """Monitors system resources and reports health status.
 
-    Contract: ``check()`` returns a :class:`ResourceStatus` snapshot.
-    Implementations should be non-blocking and complete within 100 ms.
+    Contract:
+    - Async (may perform I/O like disk checks)
+    - Called periodically by background task
+    - Results fed into /health endpoint and routing decisions
     """
 
     @abstractmethod
-    async def check(self) -> ResourceStatus:
-        """Return a current resource status snapshot."""
+    async def check(self) -> ResourceStatus: ...
