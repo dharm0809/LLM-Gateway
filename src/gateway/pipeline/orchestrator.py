@@ -1111,6 +1111,17 @@ async def _run_pre_checks(
     if err is not None:
         return _PreCheckResult(error=err)
 
+    # Shadow policy evaluation (observe-only)
+    if settings.shadow_policy_enabled and ctx.control_store is not None:
+        try:
+            shadow_policies = ctx.control_store.list_shadow_policies(settings.gateway_tenant_id)
+            if shadow_policies:
+                from gateway.pipeline.shadow_policy import run_shadow_policies
+                shadow_results = await run_shadow_policies(shadow_policies, att_ctx)
+                call.metadata["shadow_policy_results"] = shadow_results
+        except Exception as e:
+            logger.warning("Shadow policy evaluation failed: %s", e)
+
     if not is_audit_only:
         wal_err = _wal_backpressure_check(request, ctx, settings, provider, model)
         if wal_err is not None:

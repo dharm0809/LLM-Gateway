@@ -142,6 +142,12 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Shadow policy mode
+    shadow_policy_enabled: bool = Field(
+        default=False,
+        description="Enable shadow policy mode (log decisions without enforcing).",
+    )
+
     # Mode
     enforcement_mode: Literal["enforced", "audit_only"] = Field(default="enforced")
     skip_governance: bool = Field(default=False, description="If True, run as transparent proxy (Phase 1 only)")

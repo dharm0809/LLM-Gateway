@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS content_policies (
     updated_at TEXT NOT NULL,
     UNIQUE(tenant_id, analyzer_id, category)
 );
+
+CREATE TABLE IF NOT EXISTS shadow_policies (
+    policy_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    rules_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -337,6 +347,59 @@ class ControlPlaneStore:
         ]
         for tenant, analyzer, category, action in defaults:
             self.upsert_content_policy(tenant, analyzer, category, action)
+
+    # ── Shadow Policy CRUD ─────────────────────────────────────
+
+    def list_shadow_policies(self, tenant_id: str = "") -> list[dict[str, Any]]:
+        conn = self._ensure_conn()
+        if tenant_id:
+            cur = conn.execute(
+                "SELECT * FROM shadow_policies WHERE tenant_id = ? ORDER BY updated_at DESC",
+                (tenant_id,),
+            )
+        else:
+            cur = conn.execute("SELECT * FROM shadow_policies ORDER BY updated_at DESC")
+        rows = []
+        for row in cur.fetchall():
+            d = dict(row)
+            d["rules"] = json.loads(d.pop("rules_json", "[]"))
+            rows.append(d)
+        return rows
+
+    def upsert_shadow_policy(
+        self, policy_id: str, tenant_id: str, name: str, rules: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        conn = self._ensure_conn()
+        now = self._now()
+        policy_id = policy_id or self._new_id()
+        conn.execute(
+            """INSERT INTO shadow_policies
+                   (policy_id, tenant_id, name, version, rules_json, created_at, updated_at)
+               VALUES (?, ?, ?, 1, ?, ?, ?)
+               ON CONFLICT(policy_id) DO UPDATE SET
+                   name = excluded.name,
+                   version = shadow_policies.version + 1,
+                   rules_json = excluded.rules_json,
+                   updated_at = excluded.updated_at
+            """,
+            (policy_id, tenant_id, name, json.dumps(rules), now, now),
+        )
+        conn.commit()
+        cur = conn.execute(
+            "SELECT * FROM shadow_policies WHERE policy_id = ?", (policy_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            d = dict(row)
+            d["rules"] = json.loads(d.pop("rules_json", "[]"))
+            return d
+        return {"policy_id": policy_id}
+
+    def delete_shadow_policy(self, policy_id: str) -> bool:
+        conn = self._ensure_conn()
+        cur = conn.execute("DELETE FROM shadow_policies WHERE policy_id = ?", (policy_id,))
+        conn.commit()
+        return cur.rowcount > 0
 
     # ── Sync-contract formatters ──────────────────────────────
 
