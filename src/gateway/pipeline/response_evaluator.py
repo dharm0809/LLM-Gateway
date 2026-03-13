@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from dataclasses import dataclass
+from typing import Any
 
 from starlette.responses import JSONResponse
 
@@ -13,6 +15,31 @@ from gateway.cache.policy_cache import PolicyCache
 from gateway.content.base import ContentAnalyzer, Decision, Verdict
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ContentBlockDetail:
+    """Structured explanation for a content analysis block decision."""
+
+    analyzer_id: str
+    category: str
+    confidence: float
+    reason: str
+
+    def to_response_body(self) -> dict[str, Any]:
+        return {
+            "error": "Blocked by content analysis",
+            "reason": (
+                f"Content analyzer '{self.analyzer_id}' flagged category "
+                f"'{self.category}' (confidence: {self.confidence:.2f})"
+            ),
+            "governance_decision": {
+                "analyzer_id": self.analyzer_id,
+                "category": self.category,
+                "confidence": self.confidence,
+                "reason": self.reason,
+            },
+        }
 
 # ---------------------------------------------------------------------------
 # Content analysis cache — SHA256-keyed, bounded to prevent unbounded growth
@@ -147,14 +174,13 @@ async def evaluate_post_inference(
             "Response blocked by analyzer %s: category=%s reason=%s confidence=%.2f",
             top.analyzer_id, top.category, top.reason, top.confidence,
         )
-        err = JSONResponse(
-            {
-                "error": "Response blocked by content policy",
-                "category": top.category,
-                "analyzer_id": top.analyzer_id,
-            },
-            status_code=403,
+        detail = ContentBlockDetail(
+            analyzer_id=top.analyzer_id,
+            category=top.category,
+            confidence=top.confidence,
+            reason=top.reason,
         )
+        err = JSONResponse(detail.to_response_body(), status_code=403)
         return True, policy_cache.version, "blocked", analyzer_decisions, err
 
     if warns:
