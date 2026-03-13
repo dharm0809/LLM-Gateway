@@ -1,4 +1,4 @@
-"""Weighted load balancer for model group endpoints."""
+"""Power-of-Two-Choices (P2C) load balancer for model group endpoints."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ class Endpoint:
     weight: float = 1.0
     healthy: bool = True
     cooldown_until: float = 0.0
+    outstanding: int = 0
 
 
 @dataclass
@@ -24,22 +25,41 @@ class ModelGroup:
 
 
 class LoadBalancer:
-    """Weighted random selection across model group endpoints with health tracking."""
+    """Power-of-Two-Choices selection across model group endpoints with health tracking.
+
+    When 2+ healthy endpoints exist, samples two at random and picks the one
+    with fewer outstanding (in-flight) requests.  Falls back to direct return
+    when only one healthy endpoint remains.
+    """
 
     def __init__(self, groups: list[ModelGroup]):
         self._groups = groups
 
     def select_endpoint(self, model_id: str) -> Endpoint | None:
-        """Weighted random selection from healthy endpoints matching model_id."""
+        """P2C selection from healthy endpoints matching *model_id*."""
         for group in self._groups:
             if not fnmatch(model_id.lower(), group.pattern.lower()):
                 continue
             healthy = [ep for ep in group.endpoints if ep.healthy]
             if not healthy:
                 return None
-            weights = [ep.weight for ep in healthy]
-            return random.choices(healthy, weights=weights, k=1)[0]
+            if len(healthy) == 1:
+                return healthy[0]
+            a, b = random.sample(healthy, 2)
+            return a if a.outstanding <= b.outstanding else b
         return None
+
+    # ------------------------------------------------------------------
+    # Outstanding request tracking
+    # ------------------------------------------------------------------
+
+    def increment_outstanding(self, endpoint: Endpoint) -> None:
+        """Record that a new in-flight request has been dispatched to *endpoint*."""
+        endpoint.outstanding += 1
+
+    def decrement_outstanding(self, endpoint: Endpoint) -> None:
+        """Record that an in-flight request to *endpoint* has completed."""
+        endpoint.outstanding = max(0, endpoint.outstanding - 1)
 
     def mark_unhealthy(self, model_id: str, endpoint_url: str, cooldown_seconds: float = 30.0):
         """Mark endpoint as unhealthy with cooldown."""
