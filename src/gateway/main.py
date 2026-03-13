@@ -659,6 +659,15 @@ async def on_startup() -> None:
                 "SECURITY: Control plane is enabled but WALACOR_GATEWAY_API_KEYS is empty — "
                 "control plane mutations (attestations, policies, budgets) are accessible without authentication"
             )
+        # Phase 23: Startup probes (provider health, disk, routing)
+        if settings.startup_probes_enabled:
+            from gateway.adaptive.startup_probes import run_startup_probes
+            ctx.startup_probe_results = await run_startup_probes(ctx.http_client, settings)
+            # Apply disk auto-scaling
+            disk_probe = ctx.startup_probe_results.get("disk_space")
+            if disk_probe and disk_probe.detail.get("auto_max_gb") is not None:
+                ctx.effective_wal_max_gb = disk_probe.detail["auto_max_gb"]
+                logger.info("WAL max size auto-scaled to %.2f GB", ctx.effective_wal_max_gb)
         await _self_test()
         # Start alert bus background consumer
         if ctx.alert_bus and ctx.alert_bus._dispatchers:

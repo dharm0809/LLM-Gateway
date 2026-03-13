@@ -97,6 +97,12 @@ async def health_response(request: Request) -> JSONResponse:
             mid: caps for mid, caps in _model_capabilities.items()
         }
 
+    if ctx.startup_probe_results:
+        payload["startup_probes"] = {
+            name: {"healthy": r.healthy, **r.detail}
+            for name, r in ctx.startup_probe_results.items()
+        }
+
     return JSONResponse(payload)
 
 
