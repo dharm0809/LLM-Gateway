@@ -97,6 +97,20 @@ class Settings(BaseSettings):
         description="Llama Guard inference timeout in ms (inference takes 500ms–2s; default 5000ms).",
     )
 
+    # Prompt injection detection
+    prompt_guard_enabled: bool = Field(
+        default=False,
+        description="Enable Prompt Guard 2 prompt injection detector (requires pip install 'walacor-gateway[guard]').",
+    )
+    prompt_guard_model: str = Field(
+        default="meta-llama/Prompt-Guard-2-22M",
+        description="HuggingFace model ID for Prompt Guard 2 (22M or 86M variant).",
+    )
+    prompt_guard_threshold: float = Field(
+        default=0.9,
+        description="Classification threshold for injection detection (0.0-1.0).",
+    )
+
     # Phase 11: Token budget
     token_budget_enabled: bool = Field(default=False, description="Enable token budget enforcement")
     token_budget_period: str = Field(default="monthly", description="Budget period: 'daily' or 'monthly'")

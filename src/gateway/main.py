@@ -361,6 +361,18 @@ def _init_llama_guard(settings, ctx) -> None:
     )
 
 
+def _init_prompt_guard(settings, ctx) -> None:
+    """Prompt Guard 2 injection detection (CPU-based, 2-5ms)."""
+    from gateway.content.prompt_guard import PromptGuardAnalyzer
+    analyzer = PromptGuardAnalyzer(
+        model_id=settings.prompt_guard_model,
+        threshold=settings.prompt_guard_threshold,
+    )
+    if analyzer._available:
+        ctx.content_analyzers.append(analyzer)
+        logger.info("Content analyzer loaded: walacor.prompt_guard.v2 (model=%s)", settings.prompt_guard_model)
+
+
 async def _init_redis(settings) -> "Any | None":
     """Phase 15: Redis client for shared state (multi-replica). Returns None when redis_url is empty."""
     if not settings.redis_url:
@@ -694,6 +706,8 @@ async def on_startup() -> None:
         _init_content_analyzers(settings, ctx)
         if settings.llama_guard_enabled:
             _init_llama_guard(settings, ctx)
+        if settings.prompt_guard_enabled:
+            _init_prompt_guard(settings, ctx)
         _init_alert_bus(settings, ctx)
         _init_budget_tracker(settings, ctx)
         _init_session_chain(settings, ctx)
