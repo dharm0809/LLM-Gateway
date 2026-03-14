@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from gateway.cache.attestation_cache import AttestationCache
     from gateway.cache.policy_cache import PolicyCache
     from gateway.content.base import ContentAnalyzer
+    from gateway.export.base import AuditExporter
     from gateway.mcp.registry import ToolRegistry
     from gateway.pipeline.budget_tracker import BudgetTracker
     from gateway.pipeline.session_chain import SessionChainTracker
@@ -80,6 +81,8 @@ class PipelineContext:
         self.image_safety_analyzer: Any | None = None
         # Multimodal audit: image OCR analyzer
         self.image_ocr_analyzer: Any | None = None
+        # B.2: Audit log exporter (file, webhook, s3)
+        self.audit_exporter: AuditExporter | None = None
 
 
 _ctx = PipelineContext()

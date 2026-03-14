@@ -1464,6 +1464,13 @@ async def _build_and_write_record(
         except Exception:
             logger.debug("OTel emit_inference_span failed (fail-open)", exc_info=True)
 
+    # B.2: Export to SIEM/S3/file if configured (fail-open, non-critical)
+    if ctx.audit_exporter is not None:
+        try:
+            await ctx.audit_exporter.export(record)
+        except Exception:
+            logger.debug("Audit exporter failed (non-critical)", exc_info=True)
+
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 

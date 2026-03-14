@@ -430,6 +430,39 @@ def _init_image_ocr(settings, ctx):
     logger.info("Image OCR analyzer enabled: max_size=%dMB", settings.image_ocr_max_size_mb)
 
 
+async def _init_audit_exporter(settings, ctx) -> None:
+    """B.2: Audit log exporter — file (JSONL), webhook (Splunk/Datadog/Elastic)."""
+    if not settings.export_enabled:
+        return
+    if settings.export_type == "file":
+        from gateway.export.file_exporter import FileExporter
+        ctx.audit_exporter = FileExporter(
+            file_path=settings.export_file_path,
+            max_size_mb=settings.export_file_max_size_mb,
+        )
+    elif settings.export_type == "webhook":
+        from gateway.export.webhook_exporter import WebhookExporter
+        extra_headers: dict = {}
+        if settings.export_webhook_headers:
+            import gateway.util.json_utils as _json
+            try:
+                extra_headers = _json.loads(settings.export_webhook_headers)
+            except Exception:
+                logger.warning("export_webhook_headers is not valid JSON; ignoring")
+        exporter = WebhookExporter(
+            url=settings.export_webhook_url,
+            headers=extra_headers,
+            batch_size=settings.export_batch_size,
+            flush_interval=settings.export_flush_interval,
+        )
+        exporter.start()
+        ctx.audit_exporter = exporter
+    else:
+        logger.warning("Unknown export_type=%r; audit exporter disabled", settings.export_type)
+        return
+    logger.info("Audit exporter initialized: type=%s", settings.export_type)
+
+
 def _init_prompt_guard(settings, ctx) -> None:
     """Prompt Guard 2 injection detection (CPU-based, 2-5ms)."""
     from gateway.content.prompt_guard import PromptGuardAnalyzer
@@ -841,6 +874,8 @@ async def on_startup() -> None:
             await _init_web_search_tool(settings, ctx)
         if settings.otel_enabled:
             _init_otel(settings, ctx)
+        if settings.export_enabled:
+            await _init_audit_exporter(settings, ctx)
         if settings.control_plane_enabled:
             _init_control_plane(settings, ctx)
             await _auto_register_models(settings, ctx)
@@ -1067,6 +1102,13 @@ async def on_shutdown() -> None:
         except Exception as e:
             errors.append(f"control_store.close: {e}")
         ctx.control_store = None
+
+    if ctx.audit_exporter:
+        try:
+            await ctx.audit_exporter.close()
+        except Exception as e:
+            errors.append(f"audit_exporter.close: {e}")
+        ctx.audit_exporter = None
 
     if errors:
         logger.warning("Gateway shutdown completed with errors: %s", "; ".join(errors))

@@ -411,6 +411,19 @@ class Settings(BaseSettings):
         description="OTel service.name resource attribute.",
     )
 
+    # ── Audit log export (B.2) ────────────────────────────────────────────────
+    export_enabled: bool = Field(default=False, description="Export audit records to external destination")
+    export_type: str = Field(default="file", description="Export type: file, webhook (s3 requires boto3)")
+    export_batch_size: int = Field(default=50, description="Batch size before exporting")
+    export_flush_interval: int = Field(default=30, description="Max seconds between flushes")
+    export_s3_bucket: str = Field(default="", description="S3 bucket name for S3 exporter")
+    export_s3_prefix: str = Field(default="walacor-audit/", description="S3 key prefix")
+    export_s3_region: str = Field(default="us-east-1", description="AWS region for S3 exporter")
+    export_webhook_url: str = Field(default="", description="Webhook URL (Splunk HEC, Datadog, etc.)")
+    export_webhook_headers: str = Field(default="", description="JSON dict of extra HTTP headers")
+    export_file_path: str = Field(default="/var/walacor/export/audit.jsonl", description="JSONL output path")
+    export_file_max_size_mb: int = Field(default=100, description="Max file size before rotation (MB)")
+
     # ── Phase 23: Adaptive Gateway ────────────────────────────────────────────
     startup_probes_enabled: bool = Field(default=True, description="Run startup probes (provider health, disk, routing)")
     provider_health_check_on_startup: bool = Field(default=True, description="Ping providers at startup")
