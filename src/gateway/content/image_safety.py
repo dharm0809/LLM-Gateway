@@ -31,6 +31,7 @@ import logging
 from typing import Any
 
 import httpx
+from starlette.responses import JSONResponse
 
 from gateway.content.base import Decision, Verdict
 
@@ -203,3 +204,52 @@ class ImageSafetyAnalyzer:
                 category="safety",
                 reason="unavailable",
             )
+
+
+async def evaluate_image_safety(
+    analyzer: ImageSafetyAnalyzer,
+    images: list[dict[str, Any]],
+    max_images: int = 5,
+) -> tuple[bool, JSONResponse | None, list[dict[str, Any]]]:
+    """Run image safety on extracted images.
+
+    Returns (is_blocked, error_response_or_None, image_analysis_results).
+    """
+    analysis_results: list[dict[str, Any]] = []
+
+    if len(images) > max_images:
+        logger.warning("Too many images (%d > %d), skipping image safety", len(images), max_images)
+        for img in images:
+            analysis_results.append({
+                "image_index": img["index"],
+                "hash_sha3_512": img["hash_sha3_512"],
+                "safety_verdict": "skip",
+                "safety_category": None,
+                "safety_reason": f"exceeded_max_images_{max_images}",
+            })
+        return False, None, analysis_results
+
+    for img in images:
+        decision = await analyzer.analyze_image(img["raw_bytes"], img.get("mimetype", "image/png"))
+
+        result = {
+            "image_index": img["index"],
+            "hash_sha3_512": img["hash_sha3_512"],
+            "safety_verdict": decision.verdict.value,
+            "safety_category": decision.category if decision.verdict != Verdict.PASS else None,
+            "safety_reason": decision.reason,
+        }
+        analysis_results.append(result)
+
+        if decision.verdict == Verdict.BLOCK:
+            logger.critical(
+                "IMAGE SAFETY BLOCK: category=%s hash=%.16s...",
+                decision.category, img["hash_sha3_512"],
+            )
+            error_body = {
+                "error": f"Request blocked: image content violates safety policy ({decision.category})",
+                "category": decision.category,
+            }
+            return True, JSONResponse(error_body, status_code=403), analysis_results
+
+    return False, None, analysis_results
