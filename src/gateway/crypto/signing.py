@@ -52,8 +52,6 @@ def verify_signature(record_hash: str, signature_b64: str) -> bool:
     if _verify_key is None:
         return False
     try:
-        from cryptography.exceptions import InvalidSignature
-
         sig_bytes = base64.b64decode(signature_b64)
         _verify_key.verify(sig_bytes, record_hash.encode("utf-8"))
         return True
