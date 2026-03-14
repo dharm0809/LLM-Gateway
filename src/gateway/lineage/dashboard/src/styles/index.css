@@ -1373,3 +1373,20 @@ html[data-theme="light"] .form-select {
   .pg-send-btn { width: 100%; justify-content: center; margin-left: 0; }
   .pg-identity-row { flex-direction: column; align-items: stretch; }
 }
+
+/* Attachment cards */
+.attachment-cards { display: grid; gap: 0.5rem; margin: 0.5rem 0; }
+.attachment-card {
+  background: var(--bg-inset, #1a1a2e);
+  border: 1px solid var(--border, #333);
+  border-left: 3px solid #6c63ff;
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+.attachment-card.attachment-image { border-left-color: var(--gold, #f5a623); }
+.attachment-name { font-weight: 600; margin-bottom: 0.25rem; }
+.attachment-meta { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.25rem; align-items: center; }
+.attachment-hash { font-family: var(--mono); font-size: 0.75rem; color: var(--text-muted, #888); }
+.badge-file { background: #2d2d5e; color: #a0a0ff; }
+.badge-source { background: #1a3a1a; color: #80c080; }
+.badge-info { background: #1a3a5e; color: #80c0ff; }

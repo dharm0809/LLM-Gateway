@@ -156,6 +156,7 @@ export default function Timeline({ navigate, sessionId }) {
                     {r.policy_result && <span className={`badge ${policyBadgeClass(r.policy_result)}`}>{r.policy_result}</span>}
                     {r.user && <span className="badge badge-identity">{r.user}</span>}
                     {toolInfo.length > 0 && <span className="badge badge-gold">⚙ {toolInfo.map(t => t.tool_name || 'tool').join(', ')}</span>}
+                    {(r.file_metadata && r.file_metadata.length > 0) && <span className="badge badge-file">📎 {r.file_metadata.length} file{r.file_metadata.length > 1 ? 's' : ''}</span>}
                     {tokens && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-muted)' }}>{tokens} tokens</span>}
                     <span className="hash-gold">{truncHash(r.record_hash, 20)}</span>
                   </div>

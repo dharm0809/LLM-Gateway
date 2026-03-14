@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getExecution, getTrace } from '../api';
-import { displayModel, formatSessionId, formatTime, truncId, verdictBadgeClass, policyBadgeClass } from '../utils';
+import { displayModel, formatSessionId, formatTime, truncId, verdictBadgeClass, policyBadgeClass, formatBytes } from '../utils';
 import TraceWaterfall from '../components/TraceWaterfall';
 
 function DetailRow({ label, value, className = '' }) {
@@ -191,6 +191,48 @@ export default function Execution({ navigate, executionId, sessionId }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Attachments */}
+      {((r.file_metadata && r.file_metadata.length > 0) || (r.image_analysis && r.image_analysis.length > 0)) && (
+        <div className="card">
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 12, paddingBottom: 8, borderBottom: '1px solid var(--border)' }}>
+            Attachments
+          </div>
+          <div className="attachment-cards">
+            {(r.file_metadata || []).map((f, i) => (
+              <div key={`file-${i}`} className="attachment-card">
+                <div className="attachment-name">{f.filename || 'unknown'}</div>
+                <div className="attachment-meta">
+                  <span className="badge badge-file">{f.mimetype || 'unknown'}</span>
+                  <span>{formatBytes(f.size_bytes)}</span>
+                  <span className="badge badge-source">{f.source || 'unknown'}</span>
+                </div>
+                <div className="attachment-hash" title={f.hash_sha3_512 || ''}>
+                  SHA3: {(f.hash_sha3_512 || '').substring(0, 24)}...
+                </div>
+              </div>
+            ))}
+            {(r.image_analysis || []).map((img, i) => {
+              const verdictClass = img.safety_verdict === 'pass' ? 'badge-pass' :
+                                  img.safety_verdict === 'block' ? 'badge-fail' : 'badge-warn';
+              return (
+                <div key={`img-${i}`} className="attachment-card attachment-image">
+                  <div className="attachment-name">Image #{img.image_index}</div>
+                  <div className="attachment-meta">
+                    <span className={`badge ${verdictClass}`}>Safety: {img.safety_verdict || 'n/a'}</span>
+                    {img.safety_category && <span className="badge badge-warn">{img.safety_category}</span>}
+                    {img.ocr_text_extracted && <span className="badge badge-info">OCR: {img.ocr_text_length || 0} chars</span>}
+                    {img.ocr_pii_found && <span className="badge badge-fail">PII: {(img.ocr_pii_types || []).join(', ')}</span>}
+                  </div>
+                  <div className="attachment-hash" title={img.hash_sha3_512 || ''}>
+                    SHA3: {(img.hash_sha3_512 || '').substring(0, 24)}...
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
