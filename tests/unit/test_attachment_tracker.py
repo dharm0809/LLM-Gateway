@@ -1,6 +1,5 @@
 """Unit tests for attachment notification cache."""
 
-import time
 from gateway.middleware.attachment_tracker import AttachmentNotificationCache
 
 
@@ -54,3 +53,62 @@ def test_store_requires_hash():
     cache = AttachmentNotificationCache(max_size=100, ttl_seconds=3600)
     cache.store({"filename": "no_hash.pdf"})
     assert len(cache._entries) == 0
+
+
+import base64
+
+
+def test_extract_images_from_messages():
+    """Extract base64 images from OpenAI-format message content blocks."""
+    from gateway.middleware.attachment_tracker import extract_images_from_messages
+
+    messages = [
+        {"role": "user", "content": [
+            {"type": "text", "text": "What is this?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+        ]},
+    ]
+    images = extract_images_from_messages(messages)
+    assert len(images) == 1
+    assert images[0]["index"] == 0
+    assert images[0]["mimetype"] == "image/png"
+    assert isinstance(images[0]["raw_bytes"], bytes)
+    assert len(images[0]["hash_sha3_512"]) == 128
+
+
+def test_extract_images_no_images():
+    """Text-only messages return empty list."""
+    from gateway.middleware.attachment_tracker import extract_images_from_messages
+
+    messages = [{"role": "user", "content": "Hello world"}]
+    assert extract_images_from_messages(messages) == []
+
+
+def test_extract_images_url_reference_skipped():
+    """URL references (not base64) are logged but not extracted."""
+    from gateway.middleware.attachment_tracker import extract_images_from_messages
+
+    messages = [
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}},
+        ]},
+    ]
+    images = extract_images_from_messages(messages)
+    assert len(images) == 0
+
+
+def test_extract_images_multiple():
+    """Multiple images across messages are all extracted."""
+    from gateway.middleware.attachment_tracker import extract_images_from_messages
+
+    b64 = base64.b64encode(b"fake_png_data").decode()
+    messages = [
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ]},
+    ]
+    images = extract_images_from_messages(messages)
+    assert len(images) == 2
+    assert images[0]["mimetype"] == "image/png"
+    assert images[1]["mimetype"] == "image/jpeg"

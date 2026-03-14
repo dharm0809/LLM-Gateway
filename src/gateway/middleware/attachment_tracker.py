@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import time
 from collections import OrderedDict
@@ -41,3 +43,43 @@ class AttachmentNotificationCache:
             del self._entries[file_hash]
             return None
         return meta
+
+
+def extract_images_from_messages(messages: list[dict]) -> list[dict[str, Any]]:
+    """Extract base64-encoded images from OpenAI-format message content blocks.
+
+    Returns list of dicts: {index, mimetype, raw_bytes, hash_sha3_512, size_bytes}.
+    URL references (non-base64) are skipped.
+    """
+    images: list[dict[str, Any]] = []
+    idx = 0
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") not in ("image_url", "image"):
+                continue
+            url_obj = block.get("image_url") or block
+            url = url_obj.get("url", "") if isinstance(url_obj, dict) else ""
+            if not url.startswith("data:"):
+                logger.debug("Skipping non-base64 image URL: %.60s...", url)
+                continue
+            try:
+                header, b64_data = url.split(",", 1)
+                mimetype = header.split(";")[0].replace("data:", "")
+                raw_bytes = base64.b64decode(b64_data)
+                file_hash = hashlib.sha3_512(raw_bytes).hexdigest()
+                images.append({
+                    "index": idx,
+                    "mimetype": mimetype,
+                    "raw_bytes": raw_bytes,
+                    "size_bytes": len(raw_bytes),
+                    "hash_sha3_512": file_hash,
+                })
+                idx += 1
+            except Exception:
+                logger.warning("Failed to decode base64 image at index %d", idx, exc_info=True)
+    return images
