@@ -230,3 +230,33 @@ def test_build_execution_record_with_file_metadata():
     )
     assert record["file_metadata"] == file_metadata
     assert record["image_analysis"] == []
+
+
+def test_lineage_reader_get_attachments(tmp_path):
+    """LineageReader.get_attachments extracts file_metadata from execution records."""
+    import json
+    import sqlite3
+
+    db_path = str(tmp_path / "wal.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("""CREATE TABLE wal_records (
+        execution_id TEXT PRIMARY KEY, record_json TEXT NOT NULL,
+        created_at TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0, delivered_at TEXT)""")
+
+    record = {
+        "execution_id": "exec-1",
+        "session_id": "sess-1",
+        "file_metadata": [{"filename": "test.pdf", "hash_sha3_512": "abc", "mimetype": "application/pdf", "size_bytes": 1000}],
+        "image_analysis": [],
+    }
+    conn.execute("INSERT INTO wal_records VALUES (?, ?, ?, 0, NULL)", ("exec-1", json.dumps(record), "2026-03-14T00:00:00Z"))
+    conn.commit()
+    conn.close()
+
+    from gateway.lineage.reader import LineageReader
+    reader = LineageReader(db_path)
+    result = reader.get_attachments("sess-1")
+    assert len(result) == 1
+    assert result[0]["filename"] == "test.pdf"
+    assert result[0]["execution_id"] == "exec-1"
+    reader.close()

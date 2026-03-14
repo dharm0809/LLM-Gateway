@@ -144,3 +144,15 @@ async def lineage_verify(request: Request) -> JSONResponse:
     except Exception as e:
         logger.error("lineage_verify error: %s", e, exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def lineage_attachments(request: Request) -> JSONResponse:
+    """GET /v1/lineage/attachments?session_id=X — file metadata for a session."""
+    session_id = request.query_params.get("session_id", "")
+    if not session_id:
+        return JSONResponse({"error": "session_id query parameter required"}, status_code=400)
+    ctx = get_pipeline_context()
+    if not ctx.lineage_reader:
+        return JSONResponse({"error": "Lineage not enabled"}, status_code=503)
+    attachments = ctx.lineage_reader.get_attachments(session_id)
+    return JSONResponse({"session_id": session_id, "attachments": attachments})

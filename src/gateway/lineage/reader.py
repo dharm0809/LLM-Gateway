@@ -410,6 +410,21 @@ class LineageReader:
             "grand_total_usd": round(grand_total, 6),
         }
 
+    def get_attachments(self, session_id: str) -> list[dict]:
+        """Get all file_metadata entries from execution records in a session."""
+        conn = self._ensure_conn()
+        rows = conn.execute(
+            "SELECT record_json FROM wal_records WHERE json_extract(record_json, '$.session_id') = ?",
+            (session_id,),
+        ).fetchall()
+        attachments = []
+        for (record_json,) in rows:
+            record = json.loads(record_json)
+            for fm in record.get("file_metadata", []):
+                fm["execution_id"] = record.get("execution_id", "")
+                attachments.append(fm)
+        return attachments
+
     def verify_chain(self, session_id: str) -> dict:
         """Verify Merkle chain integrity for a session.
 
