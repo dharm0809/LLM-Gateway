@@ -500,6 +500,34 @@ def _is_tool_unsupported_error(status_code: int, body: bytes | memoryview | None
         return False
 
 
+def _filter_tools_for_key(
+    tool_definitions: list[dict],
+    api_key: str | None,
+    ctx,
+) -> list[dict]:
+    """Filter tool definitions based on per-key allow-list stored in the control plane.
+
+    Returns:
+      - All tools unchanged if api_key is None, control_store is None, or key has no
+        restrictions (get_allowed_tools returns None → unrestricted).
+      - Empty list if the key has an explicit empty allow-list (all tools blocked).
+      - Filtered list containing only the tools whose name appears in the allow-list.
+    """
+    if not api_key or ctx.control_store is None:
+        return tool_definitions
+    import hashlib
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+    allowed = ctx.control_store.get_allowed_tools(key_hash)
+    if allowed is None:
+        return tool_definitions  # no restrictions for this key
+    if not allowed:
+        return []  # explicitly blocked all tools
+    return [
+        t for t in tool_definitions
+        if (t.get("function", {}).get("name") in allowed or t.get("name") in allowed)
+    ]
+
+
 def _inject_tools_into_call(call: ModelCall, tool_definitions: list[dict]) -> ModelCall:
     """Transparently add MCP tool definitions to request body (active strategy)."""
     if not tool_definitions:
@@ -1282,7 +1310,12 @@ async def _run_pre_checks(
             logger.debug("Skipping tool injection for %s — known to not support tools", call.model_id)
             tool_strategy = "none"
         else:
-            call = _inject_tools_into_call(call, ctx.tool_registry.get_tool_definitions())
+            from gateway.auth.api_key import get_api_key_from_request as _get_key
+            _api_key = _get_key(request)
+            _tool_defs = _filter_tools_for_key(
+                ctx.tool_registry.get_tool_definitions(), _api_key, ctx
+            )
+            call = _inject_tools_into_call(call, _tool_defs)
 
     audit_metadata: dict = {}
     if is_audit_only:

@@ -91,6 +91,14 @@ CREATE TABLE IF NOT EXISTS key_policy_assignments (
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (api_key_hash, policy_id)
 );
+
+CREATE TABLE IF NOT EXISTS key_tool_permissions (
+    api_key_hash  TEXT NOT NULL,
+    tool_name     TEXT NOT NULL,
+    allowed       INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (api_key_hash, tool_name)
+);
 """
 
 
@@ -549,3 +557,76 @@ class ControlPlaneStore:
             " ORDER BY api_key_hash, policy_id"
         ).fetchall()
         return [{"api_key_hash": r[0], "policy_id": r[1], "created_at": r[2]} for r in rows]
+
+    # ── Key-Tool Permission CRUD ──────────────────────────────
+
+    def get_allowed_tools(self, api_key_hash: str) -> list[str] | None:
+        """Return allowed tool names for a key, or None if no restrictions are set.
+
+        Semantics:
+          None  → key has no row at all → unrestricted (use all tools)
+          []    → key has rows but none with allowed=1 → all tools blocked
+          [...]  → list of tool names the key may use
+        """
+        conn = self._ensure_conn()
+        rows = conn.execute(
+            "SELECT tool_name FROM key_tool_permissions WHERE api_key_hash = ? AND allowed = 1",
+            (api_key_hash,),
+        ).fetchall()
+        if not rows:
+            # Distinguish "no rows at all" (unrestricted) from "rows but none allowed" (all denied)
+            any_row = conn.execute(
+                "SELECT 1 FROM key_tool_permissions WHERE api_key_hash = ? LIMIT 1",
+                (api_key_hash,),
+            ).fetchone()
+            return None if any_row is None else []
+        return [row[0] for row in rows]
+
+    def set_tool_permission(self, api_key_hash: str, tool_name: str, allowed: bool) -> None:
+        """Upsert a single tool permission for a key."""
+        conn = self._ensure_conn()
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO key_tool_permissions"
+                " (api_key_hash, tool_name, allowed) VALUES (?, ?, ?)",
+                (api_key_hash, tool_name, 1 if allowed else 0),
+            )
+
+    def set_allowed_tools(self, api_key_hash: str, tool_names: list[str]) -> None:
+        """Replace all tool permissions for a key with the given allow-list.
+
+        When tool_names is empty, a sentinel row (tool_name='', allowed=0) is
+        inserted so that the key is marked as *explicitly restricted to nothing*,
+        which is distinguishable from a key that has never had any restrictions
+        set (no rows at all → unrestricted).
+        """
+        conn = self._ensure_conn()
+        with conn:
+            conn.execute(
+                "DELETE FROM key_tool_permissions WHERE api_key_hash = ?",
+                (api_key_hash,),
+            )
+            if tool_names:
+                for name in tool_names:
+                    conn.execute(
+                        "INSERT INTO key_tool_permissions"
+                        " (api_key_hash, tool_name, allowed) VALUES (?, ?, 1)",
+                        (api_key_hash, name),
+                    )
+            else:
+                # Sentinel row: key is restricted but all tools are blocked
+                conn.execute(
+                    "INSERT INTO key_tool_permissions"
+                    " (api_key_hash, tool_name, allowed) VALUES (?, '', 0)",
+                    (api_key_hash,),
+                )
+
+    def remove_tool_permission(self, api_key_hash: str, tool_name: str) -> bool:
+        """Remove a tool permission entry. Returns True if it existed."""
+        conn = self._ensure_conn()
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM key_tool_permissions WHERE api_key_hash = ? AND tool_name = ?",
+                (api_key_hash, tool_name),
+            )
+        return cursor.rowcount > 0

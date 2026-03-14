@@ -60,6 +60,9 @@ from gateway.control.api import (
     control_set_key_policies,
     control_remove_key_policy,
     control_list_key_policy_assignments,
+    control_get_key_tools,
+    control_set_key_tools,
+    control_remove_key_tool,
 )
 from gateway.control.sync_api import (
     sync_attestation_proofs,
@@ -1202,6 +1205,9 @@ def create_app() -> Starlette:
         Route("/v1/control/keys/{key_hash}/policies", control_get_key_policies, methods=["GET"]),
         Route("/v1/control/keys/{key_hash}/policies", control_set_key_policies, methods=["PUT"]),
         Route("/v1/control/keys/{key_hash}/policies/{policy_id:path}", control_remove_key_policy, methods=["DELETE"]),
+        Route("/v1/control/keys/{key_hash}/tools", control_get_key_tools, methods=["GET"]),
+        Route("/v1/control/keys/{key_hash}/tools", control_set_key_tools, methods=["PUT"]),
+        Route("/v1/control/keys/{key_hash}/tools/{tool_name:path}", control_remove_key_tool, methods=["DELETE"]),
         # Sync-contract endpoints (for fleet sync)
         Route("/v1/attestation-proofs", sync_attestation_proofs, methods=["GET"]),
         Route("/v1/policies", sync_policies, methods=["GET"]),

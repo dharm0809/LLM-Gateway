@@ -557,6 +557,61 @@ async def control_list_key_policy_assignments(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# ── Key-Tool Permission endpoints ─────────────────────────────
+
+async def control_get_key_tools(request: Request) -> JSONResponse:
+    """GET /v1/control/keys/{key_hash}/tools — list allowed tools for an API key."""
+    store = _store_or_503()
+    if store is None:
+        return JSONResponse({"error": "Control plane not available"}, status_code=503)
+    key_hash = request.path_params["key_hash"]
+    try:
+        allowed = store.get_allowed_tools(key_hash)
+        return JSONResponse({
+            "api_key_hash": key_hash,
+            "allowed_tools": allowed,
+            "unrestricted": allowed is None,
+        })
+    except Exception as e:
+        logger.error("control_get_key_tools error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def control_set_key_tools(request: Request) -> JSONResponse:
+    """PUT /v1/control/keys/{key_hash}/tools — set (replace) tool allow-list for an API key."""
+    store = _store_or_503()
+    if store is None:
+        return JSONResponse({"error": "Control plane not available"}, status_code=503)
+    key_hash = request.path_params["key_hash"]
+    try:
+        body = await request.json()
+        tool_names = body.get("allowed_tools", [])
+        if not isinstance(tool_names, list):
+            return JSONResponse({"error": "allowed_tools must be a list"}, status_code=400)
+        store.set_allowed_tools(key_hash, tool_names)
+        return JSONResponse({"api_key_hash": key_hash, "allowed_tools": tool_names, "status": "updated"})
+    except Exception as e:
+        logger.error("control_set_key_tools error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+async def control_remove_key_tool(request: Request) -> JSONResponse:
+    """DELETE /v1/control/keys/{key_hash}/tools/{tool_name} — remove a tool from a key's allow-list."""
+    store = _store_or_503()
+    if store is None:
+        return JSONResponse({"error": "Control plane not available"}, status_code=503)
+    key_hash = request.path_params["key_hash"]
+    tool_name = request.path_params["tool_name"]
+    try:
+        removed = store.remove_tool_permission(key_hash, tool_name)
+        if not removed:
+            return JSONResponse({"error": "Permission not found"}, status_code=404)
+        return JSONResponse({"api_key_hash": key_hash, "tool_name": tool_name, "status": "removed"})
+    except Exception as e:
+        logger.error("control_remove_key_tool error: %s", e, exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── Policy Template endpoints ─────────────────────────────────
 
 async def control_list_templates(request: Request) -> JSONResponse:
