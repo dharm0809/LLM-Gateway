@@ -712,7 +712,7 @@ async def on_startup() -> None:
 
         ctx.http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(settings.provider_timeout, connect=settings.provider_connect_timeout),
-            limits=httpx.Limits(max_connections=settings.provider_max_connections, max_keepalive_connections=settings.provider_max_keepalive),
+            limits=httpx.Limits(max_connections=settings.provider_max_connections, max_keepalive_connections=settings.provider_max_keepalive, keepalive_expiry=30),
             http2=True,
             event_hooks={"response": [_on_provider_response]},
         )

@@ -182,6 +182,8 @@ async def stream_with_tee(
                     buffer_size += len(chunk)
                 # Mid-stream S4 safety check
                 accumulated_text += chunk.decode("utf-8", errors="replace")
+                if len(accumulated_text) > 4096:
+                    accumulated_text = accumulated_text[-4096:]
                 if check_stream_safety(accumulated_text):
                     logger.warning("S4 safety abort triggered mid-stream")
                     yield b'event: error\ndata: {"error": "content_safety", "message": "Response blocked by safety filter (S4)"}\n\n'
@@ -228,6 +230,7 @@ async def stream_with_tee(
         headers={
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
             "X-Session-Id": call.metadata.get("session_id", ""),
         },
         background=None,  # task runs in generate()'s finally — see above
