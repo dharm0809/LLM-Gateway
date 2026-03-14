@@ -396,6 +396,10 @@ class Settings(BaseSettings):
         description="Verify OpenSSF model signatures during discovery.",
     )
 
+    # Phase 26: Ed25519 record signing
+    record_signing_enabled: bool = Field(default=False, description="Sign record hashes with Ed25519 for non-repudiation")
+    record_signing_key_path: str = Field(default="", description="Path to Ed25519 private key PEM file")
+
     # Phase 24: Periodic Merkle tree checkpoints
     merkle_checkpoint_enabled: bool = Field(default=False, description="Enable periodic Merkle tree checkpoints for session chains")
     merkle_checkpoint_interval_seconds: int = Field(default=3600, description="Seconds between Merkle tree checkpoint builds")

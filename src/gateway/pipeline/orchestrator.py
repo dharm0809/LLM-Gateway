@@ -758,6 +758,18 @@ async def _apply_session_chain(record, session_id: str | None, ctx, settings) ->
     record["sequence_number"] = seq_num
     record["previous_record_hash"] = prev_hash
     record["record_hash"] = record_hash_val
+
+    # Phase 26: Ed25519 record signing (fail-open)
+    if record_hash_val:
+        try:
+            from gateway.crypto.signing import sign_hash
+
+            signature = sign_hash(record_hash_val)
+            if signature:
+                record["record_signature"] = signature
+        except Exception:
+            pass  # fail-open: never block record writing
+
     return record_hash_val
 
 
