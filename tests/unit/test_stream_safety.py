@@ -24,14 +24,14 @@ def test_pii_ssn_detected():
 def test_pii_credit_card_detected():
     """Credit card pattern detected."""
     text = "x" * 400 + " card: 4111-1111-1111-1111 " + "x" * 100
-    found, new_len = check_stream_pii(text, 0)
+    found, _ = check_stream_pii(text, 0)
     assert found is True
 
 
 def test_pii_aws_key_detected():
     """AWS access key pattern detected."""
     text = "x" * 400 + " key: AKIA1234567890ABCDEF " + "x" * 100
-    found, new_len = check_stream_pii(text, 0)
+    found, _ = check_stream_pii(text, 0)
     assert found is True
 
 
@@ -66,7 +66,7 @@ def test_pii_incremental_check():
 
     # Next check starts from checked position
     text2 = text + " SSN: 123-45-6789 " + "x" * 500
-    found, checked2 = check_stream_pii(text2, checked)
+    found, _ = check_stream_pii(text2, checked)
     assert found is True
 
 
@@ -74,5 +74,5 @@ def test_pii_overlap_boundary():
     """PII pattern at boundary of last checked position is caught."""
     # Put SSN right at the boundary with spaces for word boundary matching
     text = "x" * 499 + " 123-45-6789 " + "x" * 499
-    found, checked = check_stream_pii(text, 500)
+    found, _ = check_stream_pii(text, 500)
     assert found is True  # Should catch via 50-char overlap
