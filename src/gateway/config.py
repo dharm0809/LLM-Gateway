@@ -323,6 +323,10 @@ class Settings(BaseSettings):
     provider_max_keepalive: int = Field(default=50, description="Max keepalive provider connections")
     sse_keepalive_interval: float = Field(default=15.0, description="SSE keepalive ping interval in seconds")
 
+    # Hedged requests (tail latency reduction)
+    hedged_requests_enabled: bool = Field(default=False, description="Enable hedged cross-provider requests")
+    hedge_delay_factor: float = Field(default=1.5, description="Hedge after p95_latency * this factor")
+
     # Resilience tuning
     delivery_batch_size: int = Field(default=50, description="WAL delivery batch size per cycle")
     circuit_breaker_fail_max: int = Field(default=5, description="Failures before circuit opens")
