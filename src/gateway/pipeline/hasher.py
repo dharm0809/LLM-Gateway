@@ -29,6 +29,8 @@ def build_execution_record(
     retry_of: str | None = None,
     timings: dict | None = None,
     variant_id: str | None = None,
+    file_metadata: list[dict] | None = None,
+    image_analysis: list[dict] | None = None,
 ) -> dict:
     """Build execution record as dict (no prompt_hash/response_hash — backend hashes from content)."""
     usage = model_response.usage or {}
@@ -60,4 +62,6 @@ def build_execution_record(
         "cached_tokens": usage.get("cached_tokens", 0),
         "cache_creation_tokens": usage.get("cache_creation_tokens", 0),
         "variant_id": variant_id,
+        "file_metadata": file_metadata or [],
+        "image_analysis": image_analysis or [],
     }

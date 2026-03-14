@@ -812,6 +812,7 @@ async def _after_stream_record(
     budget_estimated: int = 0,
     pipeline_start: float | None = None,
     governance_meta: dict | None = None,
+    request: Request | None = None,
 ) -> None:
     """Background task: after stream ends, evaluate response, build chain, write record (no hashing — Walcor hashes).
 
@@ -860,6 +861,8 @@ async def _after_stream_record(
             },
             model_id=call.model_id, provider=adapter.get_provider_name(),
             latency_ms=round((time.perf_counter() - pipeline_start) * 1000, 1) if pipeline_start else None,
+            file_metadata=getattr(request.state, "file_metadata", None) if request else None,
+            image_analysis=getattr(request.state, "image_analysis", None) if request else None,
         )
         _exec_id = record.get("execution_id", "unknown")
 
@@ -889,6 +892,7 @@ async def _skip_governance_after_stream(
     call: ModelCall,
     adapter: ProviderAdapter,
     pipeline_start: float | None = None,
+    request: Request | None = None,
 ) -> None:
     """In skip_governance mode: build execution record from stream buffer and write to Walacor/WAL."""
     ctx = get_pipeline_context()
@@ -909,6 +913,8 @@ async def _skip_governance_after_stream(
             metadata={"enforcement_mode": "skip_governance"},
             model_id=call.model_id, provider=adapter.get_provider_name(),
             latency_ms=round((time.perf_counter() - pipeline_start) * 1000, 1) if pipeline_start else None,
+            file_metadata=getattr(request.state, "file_metadata", None) if request else None,
+            image_analysis=getattr(request.state, "image_analysis", None) if request else None,
         )
         if ctx.storage:
             await ctx.storage.write_execution(record)
@@ -1251,6 +1257,8 @@ async def _handle_skip_governance_non_streaming(
             metadata={"enforcement_mode": "skip_governance"},
             model_id=call.model_id, provider=adapter.get_provider_name(),
             latency_ms=round((time.perf_counter() - t0) * 1000, 1),
+            file_metadata=getattr(request.state, "file_metadata", None),
+            image_analysis=getattr(request.state, "image_analysis", None),
         )
         if ctx.storage:
             result = await ctx.storage.write_execution(record)
@@ -1270,7 +1278,7 @@ async def _handle_skip_governance(
     _set_disposition(request, "allowed")
     if call.is_streaming:
         buf: list[bytes] = []
-        task = BackgroundTask(_skip_governance_after_stream, buf, call, adapter, t0)
+        task = BackgroundTask(_skip_governance_after_stream, buf, call, adapter, t0, request)
         resp, _ = await stream_with_tee(adapter, call, request, buffer=buf, background_task=task)
         pipeline_duration.labels(step="total").observe(time.perf_counter() - t0)
         _inc_request(provider, model, "allowed")
@@ -1399,6 +1407,8 @@ async def _build_and_write_record(
         latency_ms=params.latency_ms,
         timings=params.timings,
         variant_id=params.variant_id,
+        file_metadata=getattr(request.state, "file_metadata", None),
+        image_analysis=getattr(request.state, "image_analysis", None),
     )
     # Cost attribution: compute estimated cost from pricing table
     if ctx.control_store:
@@ -1643,7 +1653,7 @@ async def _handle_request_inner(request: Request, t0: float) -> Response:
         task = BackgroundTask(
             _after_stream_record, buf, call, adapter,
             pre.att_id, pre.pv, pre.pr, pre.audit_metadata,
-            pre.budget_estimated, t0, governance_meta,
+            pre.budget_estimated, t0, governance_meta, request,
         )
         resp, _ = await stream_with_tee(
             adapter, call, request, buffer=buf, background_task=task,

@@ -198,3 +198,35 @@ async def test_attachment_notify_endpoint(anyio_backend):
     stored = cache.get("abc" * 42 + "ab")
     assert stored is not None
     assert stored["filename"] == "contract.pdf"
+
+
+def test_build_execution_record_with_file_metadata():
+    """Execution record includes file_metadata when present."""
+    from gateway.pipeline.hasher import build_execution_record
+    from unittest.mock import MagicMock
+
+    call = MagicMock()
+    call.prompt_text = "summarize this"
+    call.model_id = "qwen3:8b"
+    call.metadata = {}
+    resp = MagicMock()
+    resp.content = "Here is a summary"
+    resp.thinking_content = None
+    resp.provider_request_id = "req-1"
+    resp.model_hash = None
+    resp.usage = {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+
+    file_metadata = [{"filename": "doc.pdf", "hash_sha3_512": "abc123", "mimetype": "application/pdf", "size_bytes": 5000, "source": "openwebui_upload"}]
+
+    record = build_execution_record(
+        call=call,
+        model_response=resp,
+        attestation_id="att-1",
+        policy_version=1,
+        policy_result="pass",
+        tenant_id="t1",
+        gateway_id="gw-1",
+        file_metadata=file_metadata,
+    )
+    assert record["file_metadata"] == file_metadata
+    assert record["image_analysis"] == []
