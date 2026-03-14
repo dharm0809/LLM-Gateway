@@ -33,6 +33,7 @@ class LineageReader:
             uri = f"file:{self._path}?mode=ro"
             self._conn = sqlite3.connect(uri, uri=True)
             self._conn.execute("PRAGMA query_only=ON")
+            self._conn.execute("PRAGMA mmap_size=268435456")  # 256MB
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
