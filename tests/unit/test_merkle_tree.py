@@ -30,7 +30,7 @@ def test_two_leaves():
 def test_four_leaves():
     """Four leaves produce 3 levels."""
     leaves = ["a", "b", "c", "d"]
-    root, levels = build_merkle_tree(leaves)
+    _, levels = build_merkle_tree(leaves)
     assert len(levels) == 3
     assert levels[0] == leaves
     assert len(levels[1]) == 2  # two intermediate nodes
@@ -40,7 +40,7 @@ def test_four_leaves():
 def test_odd_leaves():
     """Odd number of leaves: last one promoted without duplication."""
     leaves = ["a", "b", "c"]
-    root, levels = build_merkle_tree(leaves)
+    _, levels = build_merkle_tree(leaves)
     assert len(levels) == 3
     # Level 1: hash(a,b) and c (promoted)
     assert levels[1][0] == _hash_pair("a", "b")
@@ -67,7 +67,7 @@ def test_inclusion_proof_invalid_leaf():
 def test_inclusion_proof_invalid_root():
     """Wrong root hash fails verification."""
     leaves = ["a", "b", "c", "d"]
-    root, levels = build_merkle_tree(leaves)
+    _, levels = build_merkle_tree(leaves)
     proof = get_inclusion_proof(levels, 0)
     assert not verify_inclusion_proof(leaves[0], proof, "wrong_root")
 
