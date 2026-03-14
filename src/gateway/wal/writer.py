@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from gateway.util import json_utils as json
+import gateway.util.json_utils as json
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone

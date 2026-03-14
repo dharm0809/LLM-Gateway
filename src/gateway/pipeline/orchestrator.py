@@ -24,7 +24,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.background import BackgroundTask
 
 from gateway.config import get_settings
-from gateway.util import json_utils as json
+import gateway.util.json_utils as json
 from gateway.util.request_context import disposition_var, execution_id_var, provider_var, model_id_var, request_id_var
 from gateway.adapters import OpenAIAdapter, OllamaAdapter
 from gateway.adapters.anthropic import AnthropicAdapter

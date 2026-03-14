@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from gateway.util import json_utils as json
+import gateway.util.json_utils as json
 import time
 from typing import Any
 

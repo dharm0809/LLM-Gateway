@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from gateway.util import json_utils as json
+import gateway.util.json_utils as json
 
 import httpx
 from starlette.requests import Request
