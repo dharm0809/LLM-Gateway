@@ -1,6 +1,5 @@
 """Unit tests for Prometheus RED metrics."""
 
-import pytest
 from prometheus_client import REGISTRY
 
 from gateway.metrics.prometheus import (
