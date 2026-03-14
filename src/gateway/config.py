@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     wal_max_age_hours: float = Field(default=72.0, description="Max WAL record age hours before action")
     wal_high_water_mark: int = Field(default=10000, description="Max undelivered records before rejecting new requests (enforced mode)")
     max_stream_buffer_bytes: int = Field(default=10_485_760, description="Max stream buffer for hashing (10MB)")
+    wal_batch_enabled: bool = Field(default=False, description="Enable group commit batching for WAL writes")
+    wal_batch_flush_ms: int = Field(default=10, description="Max flush delay in milliseconds")
+    wal_batch_max_size: int = Field(default=50, description="Max records per batch before immediate flush")
 
     # Completeness Invariant (Phase 9)
     completeness_enabled: bool = Field(default=True, description="Enable gateway_attempts completeness tracking")

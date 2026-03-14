@@ -92,6 +92,24 @@ class WALWriter:
         conn.commit()
         logger.debug("WAL write execution_id=%s", execution_id)
 
+    def write_batch(self, records: list[dict[str, Any]]) -> None:
+        """Write multiple records in a single transaction using executemany."""
+        if not records:
+            return
+        conn = self._ensure_conn()
+        now = datetime.now(timezone.utc).isoformat()
+        rows = []
+        for data in records:
+            execution_id = data.get("execution_id") or data.get("event_id", "")
+            record_json = json.dumps(data)
+            rows.append((execution_id, record_json, now, 0))
+        conn.executemany(
+            "INSERT OR REPLACE INTO wal_records (execution_id, record_json, created_at, delivered) VALUES (?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+        logger.debug("WAL write_batch count=%d", len(rows))
+
     def get_undelivered(self, limit: int = 50) -> list[tuple[str, str, str]]:
         """Return list of (execution_id, record_json, created_at) for undelivered records, oldest first."""
         conn = self._ensure_conn()

@@ -298,6 +298,23 @@ def _init_wal(settings, ctx) -> None:
         logger.info("Delivery worker skipped: WALACOR_CONTROL_PLANE_URL not configured")
 
 
+async def _init_batch_writer(settings, ctx) -> None:
+    """Task 18: BatchWriter for group commit WAL writes."""
+    from gateway.wal.batch_writer import BatchWriter
+
+    ctx.batch_writer = BatchWriter(
+        wal_writer=ctx.wal_writer,
+        flush_interval_ms=settings.wal_batch_flush_ms,
+        max_size=settings.wal_batch_max_size,
+    )
+    await ctx.batch_writer.start()
+    logger.info(
+        "BatchWriter enabled: flush_ms=%d max_size=%d",
+        settings.wal_batch_flush_ms,
+        settings.wal_batch_max_size,
+    )
+
+
 async def _init_walacor(settings, ctx) -> None:
     """Walacor backend storage: authenticate and warm up the client."""
     from gateway.walacor.client import WalacorClient
@@ -323,7 +340,7 @@ def _init_storage(settings, ctx) -> None:
 
     backends = []
     if ctx.wal_writer:
-        backends.append(WALBackend(ctx.wal_writer))
+        backends.append(WALBackend(ctx.wal_writer, batch_writer=ctx.batch_writer))
     if ctx.walacor_client:
         backends.append(WalacorBackend(ctx.walacor_client))
     ctx.storage = StorageRouter(backends)
@@ -706,6 +723,8 @@ async def on_startup() -> None:
 
         if settings.skip_governance:
             ctx.skip_governance = True
+            if settings.wal_batch_enabled and ctx.wal_writer:
+                await _init_batch_writer(settings, ctx)
             _init_storage(settings, ctx)
             _init_lineage(settings, ctx)
             ctx.event_loop_lag_task = asyncio.create_task(_event_loop_lag_monitor())
@@ -715,6 +734,8 @@ async def on_startup() -> None:
         await _init_governance(settings, ctx)
         if not settings.walacor_storage_enabled and not ctx.wal_writer:
             _init_wal(settings, ctx)
+        if settings.wal_batch_enabled and ctx.wal_writer:
+            await _init_batch_writer(settings, ctx)
         _init_storage(settings, ctx)
         _init_lineage(settings, ctx)
         ctx.redis_client = await _init_redis(settings)
@@ -855,6 +876,13 @@ async def on_shutdown() -> None:
             await ctx.sync_client.close()
         except Exception as e:
             errors.append(f"sync_client.close: {e}")
+
+    if ctx.batch_writer:
+        try:
+            await ctx.batch_writer.stop()
+        except Exception as e:
+            errors.append(f"batch_writer.stop: {e}")
+        ctx.batch_writer = None
 
     if ctx.wal_writer:
         try:

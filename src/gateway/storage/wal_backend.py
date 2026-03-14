@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from gateway.wal.batch_writer import BatchWriter
     from gateway.wal.writer import WALWriter
 
 logger = logging.getLogger(__name__)
@@ -17,12 +18,16 @@ class WALBackend:
 
     name = "wal"
 
-    def __init__(self, wal_writer: WALWriter) -> None:
+    def __init__(self, wal_writer: WALWriter, batch_writer: BatchWriter | None = None) -> None:
         self._writer = wal_writer
+        self._batch_writer = batch_writer
 
     async def write_execution(self, record: dict) -> bool:
         try:
-            await asyncio.to_thread(self._writer.write_and_fsync, record)
+            if self._batch_writer:
+                await self._batch_writer.enqueue(record)
+            else:
+                await asyncio.to_thread(self._writer.write_and_fsync, record)
             return True
         except Exception:
             logger.error(

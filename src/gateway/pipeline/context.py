@@ -70,6 +70,8 @@ class PipelineContext:
         self.effective_wal_max_gb: float | None = None
         self.resource_monitor_task: Any | None = None
         self.event_loop_lag_task: Any | None = None
+        # Phase 18 (Task 18): Batch WAL writer
+        self.batch_writer: Any | None = None
 
 
 _ctx = PipelineContext()
