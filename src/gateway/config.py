@@ -400,6 +400,10 @@ class Settings(BaseSettings):
     merkle_checkpoint_enabled: bool = Field(default=False, description="Enable periodic Merkle tree checkpoints for session chains")
     merkle_checkpoint_interval_seconds: int = Field(default=3600, description="Seconds between Merkle tree checkpoint builds")
 
+    # Phase 25: Transparency log publishing
+    transparency_log_enabled: bool = Field(default=False, description="Publish Merkle checkpoint roots to external transparency log")
+    transparency_log_url: str = Field(default="", description="Transparency log endpoint URL for POST requests")
+
     # Enterprise extension points (comma-separated Python dotted class paths)
     custom_startup_probes: str = Field(default="", description="Custom StartupProbe classes")
     custom_request_classifiers: str = Field(default="", description="Custom RequestClassifier classes")
