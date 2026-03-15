@@ -2,7 +2,9 @@
 
 **Governance enforcement and cryptographic audit layer for enterprise AI infrastructure.**
 
-A drop-in ASGI proxy that sits between your application and any LLM provider. No code changes required. Every inference request passes through an 8-step pipeline that enforces five security guarantees before the response reaches the caller.
+A drop-in proxy that sits between your application and any LLM provider. No code changes required. Every inference request passes through an 8-step governance pipeline that enforces five security guarantees before the response reaches the caller.
+
+Available in two deployment modes: **Python-only** (ASGI, single process) or **Hybrid Go/Python** (Go HTTP proxy + Python gRPC governance sidecar) for maximum throughput.
 
 | Guarantee | What it does |
 |---|---|
@@ -46,6 +48,31 @@ Provider (OpenAI / Anthropic / Ollama / HuggingFace / Generic)
 ```
 
 Streaming responses use a tee-buffer: chunks flow to the caller in real time while being accumulated for post-stream audit recording.
+
+### Hybrid Go/Python Mode
+
+```
+Client
+  |  POST /v1/chat/completions
+  v
++---------------------------------------------------+
+|  Go Proxy (port 8080)                             |
+|  - HTTP ingress, auth, rate limiting              |
+|  - SSE streaming with batched flushes             |
+|  - Async post-inference for lowest latency        |
+|  +-----------------------------------------------+|
+|  |  gRPC  ←→  Python Sidecar (port 50051)        ||
+|  |  - Full governance pipeline                   ||
+|  |  - Content analysis, policy engine            ||
+|  |  - Audit trail, session chains                ||
+|  +-----------------------------------------------+|
++---------------------------------------------------+
+  |
+  v
+Provider (OpenAI / Anthropic / Ollama / HuggingFace)
+```
+
+Deploy with `docker compose -f deploy/docker-compose.hybrid.yml up`.
 
 ---
 
@@ -104,6 +131,14 @@ Point any OpenAI-compatible client at `http://localhost:8000`. All config uses t
 - SHA3-512 Merkle session chains with client-side verification
 - Compliance export API — EU AI Act, NIST AI RMF, SOC 2, ISO 42001 (JSON/CSV/PDF)
 - Per-step pipeline timing in every execution record
+
+**Performance**
+- Hybrid Go/Python architecture — Go HTTP proxy with gRPC governance sidecar for maximum throughput
+- Parallelized pre-checks — policy, budget, and rate-limit evaluated concurrently via `asyncio.gather`
+- LRU content analysis cache (5000 entries) — identical content skips re-analysis
+- Batched SSE flushes (50ms intervals) in Go proxy streaming
+- Async post-inference evaluation — response sent before governance completes (configurable)
+- Singleton pattern analyzers — regex patterns compiled once, reused across requests
 
 **Operational**
 - Embedded SQLite control plane — manage attestations, policies, and budgets via API or dashboard
@@ -164,6 +199,12 @@ uvicorn gateway.main:app --reload --port 8000 --app-dir src
 
 Requirements: Python 3.12+, `walacor-core` package. Optional extras: `[redis]`, `[telemetry]`, `[auth]`.
 
+**Go proxy** (optional, for hybrid mode):
+```bash
+cd proxy && go build -o proxy . && ./proxy
+```
+Requires Go 1.21+. Configure via `PROXY_*` env vars (see `proxy/config/config.go`).
+
 ---
 
 ## Documentation
@@ -177,6 +218,8 @@ Requirements: Python 3.12+, `walacor-core` package. Optional extras: `[redis]`, 
 | **[Adapters](docs/ADAPTERS.md)** | Provider adapter details and custom adapter guide |
 | **[Flow & Soundness](docs/FLOW-AND-SOUNDNESS.md)** | Pipeline flowcharts and soundness analysis |
 | **[Executive Briefing](docs/WIKI-EXECUTIVE.md)** | What we built and why (non-technical) |
+| **[Gateway Reference](docs/GATEWAY-REFERENCE.md)** | Complete API and configuration reference |
+| **[Hybrid Architecture Plan](docs/plans/2026-03-14-hybrid-architecture-and-competitive-features.md)** | Go/Python hybrid design and competitive analysis |
 | **[Visual Workflow](docs/gateway-workflow.html)** | Interactive HTML architecture diagram |
 
 ---

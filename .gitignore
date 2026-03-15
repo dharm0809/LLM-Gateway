@@ -73,6 +73,11 @@ screenshots/
 *_pb2_grpc.py
 *_pb2.pyi
 
+# --- Go ---
+proxy/proxy
+*.exe
+*.test
+
 # --- Archives / non-source dirs ---
 /UI/
 
