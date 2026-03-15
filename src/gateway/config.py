@@ -522,6 +522,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── Stage C: gRPC sidecar ───────────────────────────────────────────────
+    grpc_enabled: bool = Field(
+        default=False,
+        description="Enable gRPC governance sidecar server (hybrid architecture)",
+    )
+    grpc_port: int = Field(
+        default=50051,
+        description="gRPC server listen port",
+    )
+    grpc_max_workers: int = Field(
+        default=10,
+        description="gRPC thread pool size (for non-async fallback paths)",
+    )
+
     # Enterprise extension points (comma-separated Python dotted class paths)
     custom_startup_probes: str = Field(default="", description="Custom StartupProbe classes")
     custom_request_classifiers: str = Field(default="", description="Custom RequestClassifier classes")
