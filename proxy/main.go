@@ -53,7 +53,7 @@ func main() {
 	slog.Info("connected to governance sidecar", "addr", cfg.BrainAddr)
 
 	// Build proxy handler.
-	proxy := handler.NewProxy(brainClient, providers, cfg.CacheEnabled, cfg.LLMForwardTimeoutSec)
+	proxy := handler.NewProxy(brainClient, providers, cfg.CacheEnabled, cfg.LLMForwardTimeoutSec, cfg.MaxBodySize)
 
 	// Build middleware chain.
 	apiKeys := cfg.ParseAPIKeys()

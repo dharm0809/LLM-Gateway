@@ -24,12 +24,16 @@ type Proxy struct {
 	client       *http.Client     // reusable HTTP client with connection pooling
 	cacheEnabled bool
 	forwardTimeout time.Duration
+	maxBodySize  int64
 }
 
 // NewProxy creates a proxy handler with the given configuration.
-func NewProxy(brainClient *brain.Client, providers map[string]string, cacheEnabled bool, forwardTimeoutSec int) *Proxy {
+func NewProxy(brainClient *brain.Client, providers map[string]string, cacheEnabled bool, forwardTimeoutSec int, maxBodySize int64) *Proxy {
 	if forwardTimeoutSec <= 0 {
 		forwardTimeoutSec = 30
+	}
+	if maxBodySize <= 0 {
+		maxBodySize = 10 * 1024 * 1024 // 10MB default
 	}
 
 	transport := &http.Transport{
@@ -43,6 +47,7 @@ func NewProxy(brainClient *brain.Client, providers map[string]string, cacheEnabl
 		providers:    providers,
 		cacheEnabled: cacheEnabled,
 		forwardTimeout: time.Duration(forwardTimeoutSec) * time.Second,
+		maxBodySize:  maxBodySize,
 		client: &http.Client{
 			Transport: transport,
 			// No global timeout — streaming responses can run long.
@@ -59,12 +64,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read and limit request body.
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024))
+	defer r.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(r.Body, p.maxBodySize))
 	if err != nil {
 		http.Error(w, `{"error":"bad_request","message":"failed to read request body"}`, http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
 	// Parse model_id, prompt, and stream flag from the request body.
 	modelID, promptText, isStream := parseRequestBody(body)

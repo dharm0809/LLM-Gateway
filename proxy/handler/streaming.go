@@ -101,11 +101,16 @@ func (p *Proxy) handleStreaming(
 	latencyMs := float64(time.Since(start).Milliseconds())
 	fullContent := contentBuf.String()
 
+	// Extract header values before goroutine — *http.Request may be recycled.
+	sessionID := r.Header.Get("X-Session-Id")
+	userID := r.Header.Get("X-User-Id")
+	tenantID := r.Header.Get("X-Tenant-Id")
+
 	// Fire-and-forget: post-inference + record execution in a goroutine.
 	go p.postInferenceAndRecord(
 		modelID, provider, promptText, fullContent, "",
 		preResult, latencyMs, promptTokens, completionTokens,
-		r,
+		sessionID, userID, tenantID,
 	)
 
 	return nil
@@ -220,7 +225,7 @@ func (p *Proxy) postInferenceAndRecord(
 	preResult *pb.PreInferenceResult,
 	latencyMs float64,
 	promptTokens, completionTokens int32,
-	r *http.Request,
+	sessionID, userID, tenantID string,
 ) {
 	defer func() {
 		if rv := recover(); rv != nil {
@@ -241,7 +246,7 @@ func (p *Proxy) postInferenceAndRecord(
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		LatencyMs:        latencyMs,
-		SessionId:        r.Header.Get("X-Session-Id"),
+		SessionId:        sessionID,
 	})
 	if err != nil {
 		slog.Error("post-inference evaluation failed", "error", err)
@@ -267,9 +272,9 @@ func (p *Proxy) postInferenceAndRecord(
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		TotalTokens:      promptTokens + completionTokens,
-		SessionId:        r.Header.Get("X-Session-Id"),
-		User:             r.Header.Get("X-User-Id"),
-		TenantId:         r.Header.Get("X-Tenant-Id"),
+		SessionId:        sessionID,
+		User:             userID,
+		TenantId:         tenantID,
 	})
 	if err != nil {
 		slog.Error("record execution failed", "error", err)

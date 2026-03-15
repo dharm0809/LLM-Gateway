@@ -51,6 +51,11 @@ func (p *Proxy) handleNonStreaming(
 
 	latencyMs := float64(time.Since(start).Milliseconds())
 
+	// Extract header values before any goroutine — *http.Request may be recycled.
+	sessionID := r.Header.Get("X-Session-Id")
+	userID := r.Header.Get("X-User-Id")
+	tenantID := r.Header.Get("X-Tenant-Id")
+
 	// If provider returned an error, forward it and still record.
 	if resp.StatusCode >= 400 {
 		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
@@ -60,7 +65,8 @@ func (p *Proxy) handleNonStreaming(
 		// Still record the failed execution.
 		go p.postInferenceAndRecord(
 			modelID, provider, promptText, string(respBody), "",
-			preResult, latencyMs, 0, 0, r,
+			preResult, latencyMs, 0, 0,
+			sessionID, userID, tenantID,
 		)
 		return nil
 	}
@@ -96,7 +102,8 @@ func (p *Proxy) handleNonStreaming(
 		// Record the blocked execution.
 		go p.recordExecution(
 			modelID, provider, promptText, content, thinkingContent,
-			preResult, "block", latencyMs, promptTokens, completionTokens, r,
+			preResult, "block", latencyMs, promptTokens, completionTokens,
+			sessionID, userID, tenantID,
 		)
 		return nil
 	}
@@ -122,7 +129,8 @@ func (p *Proxy) handleNonStreaming(
 	}
 	go p.recordExecution(
 		modelID, provider, promptText, content, thinkingContent,
-		preResult, policyResult, latencyMs, promptTokens, completionTokens, r,
+		preResult, policyResult, latencyMs, promptTokens, completionTokens,
+		sessionID, userID, tenantID,
 	)
 
 	return nil
@@ -136,7 +144,7 @@ func (p *Proxy) recordExecution(
 	policyResult string,
 	latencyMs float64,
 	promptTokens, completionTokens int32,
-	r *http.Request,
+	sessionID, userID, tenantID string,
 ) {
 	defer func() {
 		if rv := recover(); rv != nil {
@@ -160,9 +168,9 @@ func (p *Proxy) recordExecution(
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		TotalTokens:      promptTokens + completionTokens,
-		SessionId:        r.Header.Get("X-Session-Id"),
-		User:             r.Header.Get("X-User-Id"),
-		TenantId:         r.Header.Get("X-Tenant-Id"),
+		SessionId:        sessionID,
+		User:             userID,
+		TenantId:         tenantID,
 	})
 	if err != nil {
 		slog.Error("record execution failed", "error", err)
