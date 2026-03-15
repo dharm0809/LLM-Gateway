@@ -8,7 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from walacor_core import compute_sha3_512_string
+from gateway.core import compute_sha3_512_string
 
 from gateway.pipeline.session_chain import GENESIS_HASH
 

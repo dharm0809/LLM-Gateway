@@ -61,8 +61,8 @@ class PolicyCache:
         return elapsed > self._threshold
 
     def evaluate(self, attestation_context: dict, tenant_id: str) -> tuple[bool, list[Any], int]:
-        """Run policy engine; returns (blocked, results, version). Uses walacor_core."""
-        from walacor_core.policy_engine import evaluate_policies
+        """Run policy engine; returns (blocked, results, version). Uses gateway.core."""
+        from gateway.core.policy_engine import evaluate_policies
 
         policies = self.get_policies()
         if not policies:

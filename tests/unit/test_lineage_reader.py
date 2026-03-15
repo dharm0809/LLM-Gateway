@@ -8,7 +8,7 @@ import sqlite3
 import tempfile
 
 import pytest
-from walacor_core import compute_sha3_512_string
+from gateway.core import compute_sha3_512_string
 
 from gateway.lineage.reader import LineageReader
 

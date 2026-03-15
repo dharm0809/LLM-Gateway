@@ -243,7 +243,7 @@ async def _self_test() -> None:
     ctx = get_pipeline_context()
 
     # Hash self-test: SHA3-512 available (used for session chain); gateway does not hash prompt/response.
-    from walacor_core import compute_sha3_512_string
+    from gateway.core import compute_sha3_512_string
     h = compute_sha3_512_string("self-test")
     if len(h) != 128:
         raise RuntimeError(f"Hash self-test failed: expected length 128, got {len(h)}")

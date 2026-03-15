@@ -574,7 +574,7 @@ def _inject_tools_into_call(call: ModelCall, tool_definitions: list[dict]) -> Mo
 
 def _serialize_tool_interaction(t: ToolInteraction, source: str) -> dict[str, Any]:
     """Serialize one ToolInteraction to audit metadata dict (hashes input/output)."""
-    from walacor_core import compute_sha3_512_string
+    from gateway.core import compute_sha3_512_string
     d: dict[str, Any] = {"tool_id": t.tool_id, "tool_type": t.tool_type, "tool_name": t.tool_name, "source": source}
     if t.input_data is not None:
         d["input_hash"] = compute_sha3_512_string(json.dumps(t.input_data, default=str, sort_keys=True))
@@ -614,7 +614,7 @@ def _build_tool_event_record(
     gateway_id: str,
 ) -> dict[str, Any]:
     """Build a first-class tool event record for Walacor/WAL (ETId 9000003)."""
-    from walacor_core import compute_sha3_512_string
+    from gateway.core import compute_sha3_512_string
     record: dict[str, Any] = {
         "event_id": str(uuid.uuid4()),
         "execution_id": execution_id,

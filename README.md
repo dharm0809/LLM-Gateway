@@ -79,9 +79,8 @@ Deploy with `docker compose -f deploy/docker-compose.hybrid.yml up`.
 ## Quick Start
 
 ```bash
-# Install
-pip install -e ./walacor-core
-pip install -e "./Gateway[dev]"
+# Install (single package — no external dependencies needed)
+pip install -e ".[dev]"
 
 # Minimal — transparent proxy (no governance, records to WAL)
 export WALACOR_SKIP_GOVERNANCE=true
@@ -190,14 +189,13 @@ The gateway serves a built-in React dashboard at `/lineage/` with:
 ## Development
 
 ```bash
-pip install -e ./walacor-core
-pip install -e "./Gateway[dev]"
+pip install -e ".[dev]"
 pytest                          # run tests
 cp .env.gateway.example .env.gateway  # fill in credentials
 uvicorn gateway.main:app --reload --port 8000 --app-dir src
 ```
 
-Requirements: Python 3.12+, `walacor-core` package. Optional extras: `[redis]`, `[telemetry]`, `[auth]`.
+Requirements: Python 3.12+. Optional extras: `[redis]`, `[telemetry]`, `[auth]`.
 
 **Go proxy** (optional, for hybrid mode):
 ```bash

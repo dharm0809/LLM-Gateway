@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import MagicMock
 from gateway.cache.policy_cache import PolicyCache, PolicyCacheState
 from gateway.pipeline.policy_evaluator import evaluate_pre_inference
-from walacor_core.policy_engine import evaluate_policies
+from gateway.core.policy_engine import evaluate_policies
 
 
 def test_g3_policy_version_in_evaluation():

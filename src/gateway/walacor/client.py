@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from walacor_core.models.execution import ExecutionRecord
+from gateway.core.models.execution import ExecutionRecord
 
 logger = logging.getLogger(__name__)
 
