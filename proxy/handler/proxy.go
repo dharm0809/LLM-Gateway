@@ -125,7 +125,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Use sanitized prompt if PII sanitization is active.
 	if preResult.SanitizedPrompt != nil {
-		body = replacePomptInBody(body, *preResult.SanitizedPrompt)
+		body = replacePromptInBody(body, *preResult.SanitizedPrompt)
 	}
 
 	// Use rewritten model if A/B test changed it.
@@ -257,8 +257,8 @@ func extractMetadata(r *http.Request) map[string]string {
 	return meta
 }
 
-// replacePomptInBody replaces the prompt text in a JSON body with sanitized text.
-func replacePomptInBody(body []byte, sanitized string) []byte {
+// replacePromptInBody replaces the prompt text in a JSON body with sanitized text.
+func replacePromptInBody(body []byte, sanitized string) []byte {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return body

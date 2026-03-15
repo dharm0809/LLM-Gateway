@@ -249,10 +249,10 @@ func TestReplaceModelInBody(t *testing.T) {
 	}
 }
 
-func TestReplacePomptInBody(t *testing.T) {
+func TestReplacePromptInBody(t *testing.T) {
 	t.Run("messages format", func(t *testing.T) {
 		body := `{"messages":[{"role":"user","content":"original prompt"}]}`
-		result := replacePomptInBody([]byte(body), "sanitized prompt")
+		result := replacePromptInBody([]byte(body), "sanitized prompt")
 
 		var parsed struct {
 			Messages []struct {
@@ -272,7 +272,7 @@ func TestReplacePomptInBody(t *testing.T) {
 
 	t.Run("prompt format", func(t *testing.T) {
 		body := `{"prompt":"original"}`
-		result := replacePomptInBody([]byte(body), "sanitized")
+		result := replacePromptInBody([]byte(body), "sanitized")
 
 		var parsed struct {
 			Prompt string `json:"prompt"`
